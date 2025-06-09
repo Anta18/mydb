@@ -4,8 +4,8 @@ use crate::index::bplustree_search::BPlusTreeSearch;
 use crate::index::node_serializer::{
     InternalNodeSerializer, LeafNodeSerializer, NodeHeader, NodeType,
 };
-use crate::index::record::RID;
-use crate::storage::Storage;
+use crate::storage::record::RID;
+use crate::storage::storage::Storage;
 use anyhow::{Context, Result};
 
 /// Handles insertion logic and node splits in a B+ Tree with maintained parent pointers,

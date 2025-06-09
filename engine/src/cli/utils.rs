@@ -1,4 +1,4 @@
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use anyhow::Result;
 use csv::{ReaderBuilder, WriterBuilder};
 use std::path::Path;

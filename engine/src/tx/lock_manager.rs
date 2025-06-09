@@ -28,7 +28,7 @@ struct LockRequest {
     tx: TxId,
     mode: LockMode,
     /// notified when granted
-    waker: futures::channel::oneshot::Sender<()>,
+    waker: tokio::sync::oneshot::Sender<()>,
 }
 
 /// The lock state for one resource.
@@ -80,7 +80,7 @@ impl LockManager {
     /// Returns when the lock is granted.
     pub async fn lock(&self, tx: TxId, res: Resource, mode: LockMode) -> anyhow::Result<()> {
         // Create one-shot channel to await grant
-        let (tx_wake, rx_wake) = futures::channel::oneshot::channel();
+        let (tx_wake, rx_wake) = tokio::sync::oneshot::channel();
 
         // Enqueue or grant immediately
         let mut tbl = self.table.lock().unwrap();

@@ -4,7 +4,7 @@ use crate::index::bplustree::BPlusTree;
 use crate::index::node_serializer::NodeType;
 use crate::sql::binder::{BoundExpr, Value};
 use crate::sql::physical_planner::PhysicalPlan;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use anyhow::{Result, anyhow};
 use std::collections::VecDeque;
 

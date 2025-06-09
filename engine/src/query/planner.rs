@@ -1,7 +1,7 @@
 // src/sql/planner.rs
 
 use crate::sql::binder::{BoundStmt, BoundExpr, Value as BoundValue, ColumnMeta, TableMeta};
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 

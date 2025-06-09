@@ -3,7 +3,7 @@
 use crate::sql::binder::{BinaryOp, BoundExpr, DataType};
 use crate::sql::optimizer::Optimizer;
 use crate::sql::planner::LogicalPlan;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use anyhow::{Result, bail};
 
 ////////////////////////////////////////////////////////////////////////////////
