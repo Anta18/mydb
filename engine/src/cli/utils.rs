@@ -12,9 +12,9 @@ pub fn import_csv<P: AsRef<Path>>(storage: &mut Storage, table: &str, path: P) -
         let mut values = Vec::new();
         for val in record.iter() {
             if let Ok(i) = val.parse::<i64>() {
-                values.push(crate::sql::binder::Value::Int(i));
+                values.push(crate::query::binder::Value::Int(i));
             } else {
-                values.push(crate::sql::binder::Value::String(val.to_string()));
+                values.push(crate::query::binder::Value::String(val.to_string()));
             }
         }
         storage.insert_row(
@@ -36,8 +36,8 @@ pub fn export_csv<P: AsRef<Path>>(storage: &Storage, table: &str, path: P) -> Re
         let row: Vec<String> = tuple
             .into_iter()
             .map(|v| match v {
-                crate::sql::binder::Value::Int(i) => i.to_string(),
-                crate::sql::binder::Value::String(s) => s,
+                crate::query::binder::Value::Int(i) => i.to_string(),
+                crate::query::binder::Value::String(s) => s,
             })
             .collect();
         wtr.write_record(&row)?;

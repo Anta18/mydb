@@ -1,6 +1,6 @@
 // src/sql/planner.rs
 
-use crate::sql::binder::{BoundStmt, BoundExpr, Value as BoundValue, ColumnMeta, TableMeta};
+use crate::query::binder::{BoundExpr, BoundStmt, ColumnMeta, TableMeta, Value as BoundValue};
 use crate::storage::storage::Storage;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -43,8 +43,7 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         exprs: Vec<BoundExpr>,
     },
-
-    /// Placeholder for future logical joins
+    // Placeholder for future logical joins
     // Join { left: Box<LogicalPlan>, right: Box<LogicalPlan>, on: BoundExpr },
 }
 
@@ -67,10 +66,15 @@ impl<'a> Planner<'a> {
     /// Entry: plan a bound statement into a logical plan.
     pub fn plan(&mut self, stmt: BoundStmt) -> Result<LogicalPlan> {
         match stmt {
-            BoundStmt::CreateTable { name, columns } => {
-                Ok(LogicalPlan::CreateTable { table_name: name, columns })
-            }
-            BoundStmt::Insert { table, col_ordinals, values } => {
+            BoundStmt::CreateTable { name, columns } => Ok(LogicalPlan::CreateTable {
+                table_name: name,
+                columns,
+            }),
+            BoundStmt::Insert {
+                table,
+                col_ordinals,
+                values,
+            } => {
                 // Check table exists
                 if !self.catalog.contains_key(&table.to_ascii_lowercase()) {
                     bail!("Planner: unknown table '{}'", table);
@@ -81,9 +85,11 @@ impl<'a> Planner<'a> {
                     values,
                 })
             }
-            BoundStmt::Select { projections, table, filter } => {
-                self.plan_select(table, projections, filter)
-            }
+            BoundStmt::Select {
+                projections,
+                table,
+                filter,
+            } => self.plan_select(table, projections, filter),
         }
     }
 
@@ -95,7 +101,9 @@ impl<'a> Planner<'a> {
     ) -> Result<LogicalPlan> {
         // Validate table
         let table_lc = table.to_ascii_lowercase();
-        let meta = self.catalog.get(&table_lc)
+        let meta = self
+            .catalog
+            .get(&table_lc)
             .ok_or_else(|| anyhow::anyhow!("Planner: unknown table '{}'", table))?;
 
         // 1. Base scan

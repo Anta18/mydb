@@ -29,12 +29,12 @@ pub mod tx {
     pub mod recovery_manager;
 }
 
-pub mod sql {
-    pub mod lexer;
-    pub mod parser;
+pub mod query {
     pub mod binder;
-    pub mod planner;
-    pub mod optimizer;
-    pub mod physical_planner;
     pub mod executor;
+    pub mod lexer;
+    pub mod optimizer;
+    pub mod parser;
+    pub mod physical_planner;
+    pub mod planner;
 }

@@ -8,21 +8,22 @@ pub struct Frame {
     pub data: Vec<u8>,
     pub is_dirty: bool,
     pub pin_count: usize,
-    // Reference bit for CLOCK eviction
+    /// Reference bit for CLOCK eviction
     pub ref_bit: bool,
 }
 
+/// CLOCK-based buffer pool
 pub struct BufferPool {
     pool: HashMap<u64, Frame>,
     capacity: usize,
     eviction_queue: VecDeque<u64>,
     clock_hand: usize,
-    pagefile: PageFile,
+    pub pagefile: PageFile,
 }
 
 impl BufferPool {
     /// Create a new BufferPool with given capacity and underlying PageFile.
-    pub fn new(mut pagefile: PageFile, capacity: usize) -> io::Result<Self> {
+    pub fn new(pagefile: PageFile, capacity: usize) -> io::Result<Self> {
         Ok(BufferPool {
             pool: HashMap::new(),
             capacity,
@@ -34,31 +35,28 @@ impl BufferPool {
 
     /// Fetch a page into the buffer pool, pin it, and return a mutable reference.
     pub fn fetch_page(&mut self, page_no: u64) -> io::Result<&mut Frame> {
-        if let Some(frame) = self.pool.get_mut(&page_no) {
-            frame.pin_count += 1;
-            frame.ref_bit = true;
-            return Ok(frame);
+        // If not already loaded, read (and possibly evict) then insert
+        if !self.pool.contains_key(&page_no) {
+            if self.pool.len() == self.capacity {
+                self.evict_one()?;
+            }
+            let buf = self.pagefile.read_page(page_no)?;
+            let frame = Frame {
+                page_no,
+                data: buf,
+                is_dirty: false,
+                pin_count: 0,
+                ref_bit: false,
+            };
+            self.pool.insert(page_no, frame);
+            self.eviction_queue.push_back(page_no);
         }
 
-        // Evict if needed
-        if self.pool.len() == self.capacity {
-            self.evict_one()?;
-        }
-
-        // Read from disk
-        let mut buf = self.pagefile.read_page(page_no)?;
-        let frame = Frame {
-            page_no,
-            data: buf,
-            is_dirty: false,
-            pin_count: 1,
-            ref_bit: true,
-        };
-
-        // Insert into pool and eviction queue
-        self.pool.insert(page_no, frame);
-        self.eviction_queue.push_back(page_no);
-        Ok(self.pool.get_mut(&page_no).unwrap())
+        // Safe: entry exists
+        let frame = self.pool.get_mut(&page_no).unwrap();
+        frame.pin_count += 1;
+        frame.ref_bit = true;
+        Ok(frame)
     }
 
     /// Unpin a page, optionally marking it dirty.
@@ -85,7 +83,7 @@ impl BufferPool {
         Ok(())
     }
 
-    /// Evict one unpinned page using CLOCK algorithm.
+    /// Evict one unpinned page using the CLOCK algorithm.
     fn evict_one(&mut self) -> io::Result<()> {
         let len = self.eviction_queue.len();
         for _ in 0..len {
@@ -93,11 +91,11 @@ impl BufferPool {
             let frame = self.pool.get_mut(&page_no).unwrap();
             if frame.pin_count == 0 {
                 if frame.ref_bit {
-                    // Give a second chance
+                    // give second chance
                     frame.ref_bit = false;
                     self.clock_hand = (self.clock_hand + 1) % len;
                 } else {
-                    // Evict
+                    // evict
                     if frame.is_dirty {
                         self.pagefile.write_page(page_no, &frame.data)?;
                     }
@@ -106,6 +104,7 @@ impl BufferPool {
                     return Ok(());
                 }
             } else {
+                // skip pinned
                 self.clock_hand = (self.clock_hand + 1) % len;
             }
         }

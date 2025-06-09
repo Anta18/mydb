@@ -10,10 +10,12 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 
-use crate::sql::executor::Executor;
-use crate::sql::parser::Parser;
+use crate::query::executor::Executor;
+use crate::query::parser::Parser;
 use crate::storage::storage::Storage;
 use crate::tx::{log_manager::LogManager, recovery_manager::RecoveryManager};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Deserialize)]
 struct QueryRequest {

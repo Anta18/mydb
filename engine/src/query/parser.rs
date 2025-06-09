@@ -1,6 +1,6 @@
 // src/sql/parser.rs
 
-use crate::sql::lexer::{LexError, Lexer, Token, TokenKind};
+use crate::query::lexer::{LexError, Lexer, Token, TokenKind};
 use anyhow::{Context, Result, bail};
 
 /// AST definitions

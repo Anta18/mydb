@@ -1,9 +1,9 @@
-// src/sql/executor.rs
+// src/query/executor.rs
 
 use crate::index::bplustree::BPlusTree;
 use crate::index::node_serializer::NodeType;
-use crate::sql::binder::{BoundExpr, Value};
-use crate::sql::physical_planner::PhysicalPlan;
+use crate::query::binder::{BoundExpr, Value};
+use crate::query::physical_planner::PhysicalPlan;
 use crate::storage::storage::Storage;
 use anyhow::{Result, anyhow};
 use std::collections::VecDeque;
@@ -84,7 +84,7 @@ impl<'a> PhysicalOp for SeqScanOp<'a> {
             let tuple = self.storage.fetch_tuple(&self.table, rid)?;
             // apply predicate if any
             if let Some(pred) = &self.predicate {
-                if !crate::sql::executor::eval_predicate(pred, &tuple)? {
+                if !crate::query::executor::eval_predicate(pred, &tuple)? {
                     continue; // skip non-matching
                 }
             }
@@ -165,7 +165,7 @@ impl<'a> PhysicalOp for FilterOp<'a> {
 
     fn next(&mut self) -> Result<Option<Tuple>> {
         while let Some(row) = self.child.next()? {
-            if crate::sql::executor::eval_predicate(&self.predicate, &row)? {
+            if crate::query::executor::eval_predicate(&self.predicate, &row)? {
                 return Ok(Some(row));
             }
         }
@@ -198,7 +198,7 @@ impl<'a> PhysicalOp for ProjectionOp<'a> {
         if let Some(row) = self.child.next()? {
             let mut out = Vec::with_capacity(self.exprs.len());
             for expr in &self.exprs {
-                out.push(crate::sql::executor::eval_expr(expr, &row)?);
+                out.push(crate::query::executor::eval_expr(expr, &row)?);
             }
             return Ok(Some(out));
         }
@@ -245,7 +245,7 @@ fn eval_binop(left: &Value, op: BoundExpr, right: &Value) -> Result<Value> {
             Value::Int(l),
             Value::Int(r),
             BoundExpr::BinaryOp {
-                op: crate::sql::binder::BinaryOp::Eq,
+                op: crate::query::binder::BinaryOp::Eq,
                 ..
             },
         ) => Ok(Value::Int((l == r) as i64)),

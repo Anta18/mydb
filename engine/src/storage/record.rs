@@ -11,7 +11,7 @@ pub struct Page {
 
 impl Page {
     const HEADER_SIZE: usize = 8 + 2 + 2; // page_id + slot_count + free_space_off
-    const SLOT_ENTRY_SIZE: usize = 2 + 2; // offset + length
+    pub const SLOT_ENTRY_SIZE: usize = 2 + 2; // offset + length
 
     pub fn new(page_id: u64, page_size: usize) -> Self {
         let mut data = vec![0; page_size];

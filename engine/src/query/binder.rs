@@ -1,6 +1,6 @@
 // src/sql/binder.rs
 
-use crate::sql::parser::{BinaryOp, Expr as RawExpr, Statement as RawStmt, Value as RawValue};
+use crate::query::parser::{BinaryOp, Expr as RawExpr, Statement as RawStmt, Value as RawValue};
 use crate::storage::storage::Storage;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;

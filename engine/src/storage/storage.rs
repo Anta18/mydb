@@ -8,20 +8,18 @@ use anyhow::Result;
 
 /// High-level storage engine facade
 pub struct Storage {
-    pagefile: PageFile,
-    buffer_pool: BufferPool,
-    free_list: FreeList,
-    page_size: usize,
+    pub buffer_pool: BufferPool,
+    pub free_list: FreeList,
+    pub page_size: usize,
 }
 
 impl Storage {
     /// Initialize storage with a data file path, page size, and buffer pool capacity.
     pub fn new(path: &str, page_size: usize, pool_size: usize) -> Result<Self> {
-        let mut pf = PageFile::open(path, page_size)?;
+        let pf = PageFile::open(path, page_size)?;
         let bp = BufferPool::new(pf, pool_size)?;
         let fl = FreeList::new();
         Ok(Storage {
-            pagefile: bp.pagefile,
             buffer_pool: bp,
             free_list: fl,
             page_size,
@@ -35,9 +33,9 @@ impl Storage {
         let page_no = if let Some(pn) = self.free_list.choose_page(needed) {
             pn
         } else {
-            let pn = self.pagefile.allocate_page()?;
+            let pn = self.buffer_pool.pagefile.allocate_page()?;
             // register fresh page
-            let mut page = RecordPage::new(pn, self.page_size);
+            let page = RecordPage::new(pn, self.page_size);
             self.free_list.register(pn, page.free_space());
             pn
         };
@@ -48,12 +46,13 @@ impl Storage {
         let mut page = RecordPage::from_bytes(frame.data.clone(), self.page_size);
         // insert tuple
         let rid = page.insert_tuple(data)?;
+        // update free space before moving page
+        let free_space = page.free_space();
         // write back
         frame.data = page.to_bytes();
         self.buffer_pool.unpin_page(page_no, true);
         // update free list
-        let free = page.free_space();
-        self.free_list.register(page_no, free);
+        self.free_list.register(page_no, free_space);
         Ok(rid)
     }
 

@@ -15,7 +15,6 @@ pub struct NodeModifier<'a> {
     order: usize,
     internal_serializer: InternalNodeSerializer,
     leaf_serializer: LeafNodeSerializer,
-    searcher: BPlusTreeSearch<'a>,
     /// Cached path during initial locate to avoid re-traversal
     path_cache: Vec<u64>,
 }
@@ -27,7 +26,6 @@ impl<'a> NodeModifier<'a> {
             order,
             internal_serializer: InternalNodeSerializer { order },
             leaf_serializer: LeafNodeSerializer { order },
-            searcher: BPlusTreeSearch::new(storage, order),
             path_cache: Vec::new(),
         }
     }
@@ -36,7 +34,8 @@ impl<'a> NodeModifier<'a> {
     /// Returns new root page if split propagates to root.
     pub fn insert(&mut self, root_page: u64, key: u64, rid: RID) -> Result<u64> {
         // Locate leaf and cache path
-        self.path_cache = self.searcher.search_path(root_page, key)?;
+        let mut searcher = BPlusTreeSearch::new(self.storage, self.order);
+        self.path_cache = searcher.search_path(root_page, key)?;
         let leaf_page = *self.path_cache.last().unwrap();
         // Insert and handle splits
         let (new_root, _, _) = self.insert_into_leaf(leaf_page, key, rid, root_page)?;
@@ -84,20 +83,24 @@ impl<'a> NodeModifier<'a> {
             );
             frame.data.copy_from_slice(&new_buf);
             self.storage.buffer_pool.unpin_page(leaf_page, true);
-            // register free space for leaf page
-            self.storage
-                .free_list
-                .register(leaf_page, self.leaf_serializer.compute_free_space(&new_buf));
+            // register free space for leaf page - calculate free space manually
+            let used_space = new_buf.len();
+            let free_space = self.storage.page_size.saturating_sub(used_space);
+            self.storage.free_list.register(leaf_page, free_space);
             Ok((root_page, None, None))
         } else {
-            // Split leaf
+            // Split leaf - first unpin the current page to avoid double borrow
+            self.storage.buffer_pool.unpin_page(leaf_page, false);
+
             let mid = (header.key_count as usize + 1) / 2;
             let right_keys = keys.split_off(mid);
             let right_rids = rids.split_off(mid);
             header.key_count = keys.len() as u16;
             let split_key = right_keys[0];
+
             // Allocate right page
-            let right_page = self.storage.pagefile.allocate_page()?;
+            let right_page = self.storage.buffer_pool.pagefile.allocate_page()?;
+
             // New headers with parent
             let right_header = NodeHeader {
                 node_type: NodeType::Leaf,
@@ -119,22 +122,23 @@ impl<'a> NodeModifier<'a> {
                 next_leaf,
                 self.storage.page_size,
             );
-            // Write left and register
-            frame.data.copy_from_slice(&left_buf);
+
+            // Re-fetch and write left page
+            let left_frame = self.storage.buffer_pool.fetch_page(leaf_page)?;
+            left_frame.data.copy_from_slice(&left_buf);
             self.storage.buffer_pool.unpin_page(leaf_page, true);
-            self.storage.free_list.register(
-                leaf_page,
-                self.leaf_serializer.compute_free_space(&left_buf),
-            );
+            let left_free_space = self.storage.page_size.saturating_sub(left_buf.len());
+            self.storage.free_list.register(leaf_page, left_free_space);
+
             // Write right and register
-            let mut right_frame = self.storage.buffer_pool.fetch_page(right_page)?;
+            let right_frame = self.storage.buffer_pool.fetch_page(right_page)?;
             right_frame.data.copy_from_slice(&right_buf);
             self.storage.buffer_pool.unpin_page(right_page, true);
-            self.storage.free_list.register(
-                right_page,
-                self.leaf_serializer.compute_free_space(&right_buf),
-            );
-            // Link siblings parent pointers
+            let right_free_space = self.storage.page_size.saturating_sub(right_buf.len());
+            self.storage
+                .free_list
+                .register(right_page, right_free_space);
+
             // Propagate to parent without re-traversal using path_cache
             let (new_root, _, _) =
                 self.insert_into_parent(root_page, leaf_page, split_key, right_page)?;
@@ -151,7 +155,7 @@ impl<'a> NodeModifier<'a> {
     ) -> Result<(u64, Option<u64>, Option<u64>)> {
         // If left was root, create new root
         if left_page == root_page {
-            let new_root = self.storage.pagefile.allocate_page()?;
+            let new_root = self.storage.buffer_pool.pagefile.allocate_page()?;
             let header = NodeHeader {
                 node_type: NodeType::Internal,
                 key_count: 1,
@@ -167,9 +171,8 @@ impl<'a> NodeModifier<'a> {
             frame.data.copy_from_slice(&buf);
             self.storage.buffer_pool.unpin_page(new_root, true);
             // register free space
-            self.storage
-                .free_list
-                .register(new_root, self.internal_serializer.compute_free_space(&buf));
+            let free_space = self.storage.page_size.saturating_sub(buf.len());
+            self.storage.free_list.register(new_root, free_space);
             Ok((new_root, Some(split_key), Some(right_page)))
         } else {
             // Use cached path to find parent
@@ -205,19 +208,23 @@ impl<'a> NodeModifier<'a> {
                 );
                 frame.data.copy_from_slice(&new_buf);
                 self.storage.buffer_pool.unpin_page(parent_page, true);
-                self.storage.free_list.register(
-                    parent_page,
-                    self.internal_serializer.compute_free_space(&new_buf),
-                );
+                let free_space = self.storage.page_size.saturating_sub(new_buf.len());
+                self.storage.free_list.register(parent_page, free_space);
                 Ok((root_page, None, None))
             } else {
-                // Split internal
+                // Split internal - unpin current frame to avoid double borrow
+                self.storage.buffer_pool.unpin_page(parent_page, false);
+
                 let mid = header.key_count as usize / 2;
                 let promote_key = keys[mid];
                 let right_keys = keys.split_off(mid + 1);
                 let right_children = children.split_off(mid + 1);
                 header.key_count = mid as u16;
                 children.truncate(mid + 1);
+
+                // Allocate right page first
+                let new_right_page = self.storage.buffer_pool.pagefile.allocate_page()?;
+
                 // Serialize left
                 let left_buf = self.internal_serializer.serialize(
                     &header,
@@ -225,34 +232,38 @@ impl<'a> NodeModifier<'a> {
                     &children,
                     self.storage.page_size,
                 );
-                frame.data.copy_from_slice(&left_buf);
+
+                // Re-fetch and write left page
+                let left_frame = self.storage.buffer_pool.fetch_page(parent_page)?;
+                left_frame.data.copy_from_slice(&left_buf);
                 self.storage.buffer_pool.unpin_page(parent_page, true);
-                self.storage.free_list.register(
-                    parent_page,
-                    self.internal_serializer.compute_free_space(&left_buf),
-                );
+                let left_free_space = self.storage.page_size.saturating_sub(left_buf.len());
+                self.storage
+                    .free_list
+                    .register(parent_page, left_free_space);
+
                 // Prepare right node
                 let right_header = NodeHeader {
                     node_type: NodeType::Internal,
                     key_count: right_keys.len() as u16,
                     parent: header.parent,
                 };
-                let right_page = self.storage.pagefile.allocate_page()?;
                 let right_buf = self.internal_serializer.serialize(
                     &right_header,
                     &right_keys,
                     &right_children,
                     self.storage.page_size,
                 );
-                let right_frame = self.storage.buffer_pool.fetch_page(right_page)?;
+                let right_frame = self.storage.buffer_pool.fetch_page(new_right_page)?;
                 right_frame.data.copy_from_slice(&right_buf);
-                self.storage.buffer_pool.unpin_page(right_page, true);
-                self.storage.free_list.register(
-                    right_page,
-                    self.internal_serializer.compute_free_space(&right_buf),
-                );
+                self.storage.buffer_pool.unpin_page(new_right_page, true);
+                let right_free_space = self.storage.page_size.saturating_sub(right_buf.len());
+                self.storage
+                    .free_list
+                    .register(new_right_page, right_free_space);
+
                 // Recursively propagate up
-                self.insert_into_parent(root_page, parent_page, promote_key, right_page)
+                self.insert_into_parent(root_page, parent_page, promote_key, new_right_page)
             }
         }
     }

@@ -1,7 +1,7 @@
 // src/sql/optimizer.rs
 
-use crate::sql::binder::BoundExpr;
-use crate::sql::planner::LogicalPlan;
+use crate::query::binder::BoundExpr;
+use crate::query::planner::LogicalPlan;
 use anyhow::Result;
 use std::sync::Arc;
 

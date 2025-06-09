@@ -17,7 +17,7 @@ impl BPlusTree {
         let mut storage =
             Storage::new(path, page_size, pool_size).context("Initializing storage failed")?;
         // Allocate root
-        let root_page = storage.pagefile.allocate_page()?;
+        let root_page = storage.buffer_pool.pagefile.allocate_page()?;
         // Write empty leaf node header
         let header = NodeHeader {
             node_type: NodeType::Leaf,
