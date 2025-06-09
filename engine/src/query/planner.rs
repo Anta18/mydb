@@ -1,6 +1,8 @@
-// src/sql/planner.rs
+// src/query/planner.rs
 
-use crate::query::binder::{BoundExpr, BoundStmt, ColumnMeta, TableMeta, Value as BoundValue};
+use crate::query::binder::{
+    BoundExpr, BoundStmt, ColumnMeta, DataType, TableMeta, Value as BoundValue,
+};
 use crate::storage::storage::Storage;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -15,7 +17,7 @@ pub enum LogicalPlan {
     /// CREATE TABLE (no data-producing node; for DDL handling)
     CreateTable {
         table_name: String,
-        columns: Vec<(String, String)>,
+        columns: Vec<(String, DataType)>,
     },
 
     /// INSERT INTO table
@@ -66,10 +68,12 @@ impl<'a> Planner<'a> {
     /// Entry: plan a bound statement into a logical plan.
     pub fn plan(&mut self, stmt: BoundStmt) -> Result<LogicalPlan> {
         match stmt {
-            BoundStmt::CreateTable { name, columns } => Ok(LogicalPlan::CreateTable {
-                table_name: name,
-                columns,
-            }),
+            BoundStmt::CreateTable { name, columns } => {
+                Ok(LogicalPlan::CreateTable {
+                    table_name: name,
+                    columns, // now Vec<(String, DataType)>
+                })
+            }
             BoundStmt::Insert {
                 table,
                 col_ordinals,
@@ -122,7 +126,7 @@ impl<'a> Planner<'a> {
         }
 
         // 3. Projection
-        //   - If projection is *) and first expr is a wildcard literal,
+        //   - If projection is * and first expr is a wildcard literal,
         //     we could expand to all columns in order.
         //   - For now, we simply project what the user asked.
         plan = LogicalPlan::Projection {

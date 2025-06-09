@@ -122,4 +122,19 @@ impl Page {
         (&mut self.data[entry_off + 2..entry_off + 4]).write_u16::<LittleEndian>(0)?;
         Ok(())
     }
+
+    pub fn iter_slots(&self) -> impl Iterator<Item = (u16, &[u8])> + '_ {
+        (0..self.slot_count()).filter_map(move |slot_no| {
+            if let Some(tuple_data) = self.get_tuple(slot_no) {
+                // Only return slots that aren't deleted (have non-zero length)
+                if !tuple_data.is_empty() {
+                    Some((slot_no, tuple_data))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    }
 }

@@ -1,4 +1,4 @@
-// src/sql/binder.rs
+// src/query/binder.rs
 
 use crate::query::parser::{BinaryOp, Expr as RawExpr, Statement as RawStmt, Value as RawValue};
 use crate::storage::storage::Storage;
@@ -110,7 +110,7 @@ pub enum BoundStmt {
 }
 
 /// Bound expression, where column refs carry ordinals.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BoundExpr {
     Column {
         table: String,

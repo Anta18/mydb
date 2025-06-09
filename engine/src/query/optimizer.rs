@@ -1,6 +1,7 @@
-// src/sql/optimizer.rs
+// src/query/optimizer.rs
 
 use crate::query::binder::BoundExpr;
+use crate::query::parser::BinaryOp; // Import BinaryOp from parser module
 use crate::query::planner::LogicalPlan;
 use anyhow::Result;
 use std::sync::Arc;
@@ -46,17 +47,17 @@ impl Optimizer {
 
             // Rewrite input, then rebuild
             Filter { input, predicate } => {
-                let input_opt = Arc::new(Self::rewrite(input)?);
+                let input_opt = Self::rewrite(input)?;
                 Filter {
-                    input: Box::new((**input_opt).clone()),
+                    input: Box::new(input_opt), // Remove Arc wrapper and double clone
                     predicate: predicate.clone(),
                 }
             }
 
             Projection { input, exprs } => {
-                let input_opt = Arc::new(Self::rewrite(input)?);
+                let input_opt = Self::rewrite(input)?;
                 Projection {
-                    input: Box::new((**input_opt).clone()),
+                    input: Box::new(input_opt), // Remove Arc wrapper and double clone
                     exprs: exprs.clone(),
                 }
             }
@@ -80,8 +81,9 @@ impl Optimizer {
                 {
                     let combined = BoundExpr::BinaryOp {
                         left: Box::new(p1),
-                        op: crate::sql::binder::BinaryOp::And,
+                        op: BinaryOp::And, // Use BinaryOp from parser module
                         right: Box::new(predicate.clone()),
+                        data_type: crate::query::binder::DataType::Int, // Add missing data_type field
                     };
                     return Filter {
                         input: inner,
@@ -96,7 +98,7 @@ impl Optimizer {
                 {
                     return Projection {
                         input: Box::new(Filter {
-                            input: Box::new(grand),
+                            input: grand, // Remove Box::new wrapper since grand is already Box<LogicalPlan>
                             predicate: predicate.clone(),
                         }),
                         exprs,

@@ -1,4 +1,4 @@
-// src/sql/parser.rs
+// src/query/parser.rs
 
 use crate::query::lexer::{LexError, Lexer, Token, TokenKind};
 use anyhow::{Context, Result, bail};
@@ -53,13 +53,14 @@ pub enum BinaryOp {
 }
 
 /// Recursive-descent parser
-pub struct Parser<'src> {
+pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
 }
 
-impl<'src> Parser<'src> {
-    pub fn new(src: &'src str) -> Result<Self> {
+impl Parser {
+    /// Tokenize and build a new Parser
+    pub fn new(src: &str) -> Result<Self> {
         let mut tokens = Vec::new();
         for item in Lexer::new(src) {
             match item {
@@ -70,20 +71,23 @@ impl<'src> Parser<'src> {
         Ok(Parser { tokens, pos: 0 })
     }
 
+    /// Peek at the current token without consuming it.
     fn peek(&self) -> &Token {
-        &self.tokens.get(self.pos).unwrap_or(&Token {
+        self.tokens.get(self.pos).unwrap_or(&Token {
             kind: TokenKind::EOF,
             line: 0,
             col: 0,
         })
     }
 
-    fn bump(&mut self) -> &Token {
-        let tok = self.peek();
+    /// Consume and return the current token (by cloning it).
+    fn bump(&mut self) -> Token {
+        let tok = self.peek().clone();
         self.pos += 1;
         tok
     }
 
+    /// Expect the next token to be `kind`, else error.
     fn expect(&mut self, kind: TokenKind) -> Result<()> {
         let t = self.peek();
         if t.kind == kind {
@@ -100,6 +104,7 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse one statement.
     pub fn parse_statement(&mut self) -> Result<Statement> {
         match &self.peek().kind {
             TokenKind::Create => self.parse_create_table(),
@@ -112,23 +117,20 @@ impl<'src> Parser<'src> {
     fn parse_create_table(&mut self) -> Result<Statement> {
         self.expect(TokenKind::Create)?;
         self.expect(TokenKind::Table)?;
-        let name = if let TokenKind::Identifier(id) = &self.bump().kind {
-            id.clone()
-        } else {
-            bail!("Expected table name")
+        let name = match self.bump().kind {
+            TokenKind::Identifier(id) => id,
+            _ => bail!("Expected table name"),
         };
         self.expect(TokenKind::LParen)?;
         let mut cols = Vec::new();
         loop {
-            let col_name = if let TokenKind::Identifier(id) = &self.bump().kind {
-                id.clone()
-            } else {
-                bail!("Expected column name")
+            let col_name = match self.bump().kind {
+                TokenKind::Identifier(id) => id,
+                _ => bail!("Expected column name"),
             };
-            let col_type = if let TokenKind::Identifier(tp) = &self.bump().kind {
-                tp.clone()
-            } else {
-                bail!("Expected type name")
+            let col_type = match self.bump().kind {
+                TokenKind::Identifier(tp) => tp,
+                _ => bail!("Expected type name"),
             };
             cols.push((col_name, col_type));
             if self.peek().kind == TokenKind::Comma {
@@ -148,18 +150,16 @@ impl<'src> Parser<'src> {
     fn parse_insert(&mut self) -> Result<Statement> {
         self.expect(TokenKind::Insert)?;
         self.expect(TokenKind::Into)?;
-        let table = if let TokenKind::Identifier(id) = &self.bump().kind {
-            id.clone()
-        } else {
-            bail!("Expected table name")
+        let table = match self.bump().kind {
+            TokenKind::Identifier(id) => id,
+            _ => bail!("Expected table name"),
         };
         self.expect(TokenKind::LParen)?;
         let mut cols = Vec::new();
         loop {
-            if let TokenKind::Identifier(id) = &self.bump().kind {
-                cols.push(id.clone());
-            } else {
-                bail!("Expected column name")
+            match &self.bump().kind {
+                TokenKind::Identifier(id) => cols.push(id.clone()),
+                _ => bail!("Expected column name"),
             };
             if self.peek().kind == TokenKind::Comma {
                 self.bump();
@@ -200,10 +200,9 @@ impl<'src> Parser<'src> {
             break;
         }
         self.expect(TokenKind::From)?;
-        let table = if let TokenKind::Identifier(id) = &self.bump().kind {
-            id.clone()
-        } else {
-            bail!("Expected table name")
+        let table = match self.bump().kind {
+            TokenKind::Identifier(id) => id,
+            _ => bail!("Expected table name"),
         };
         let filter = if self.peek().kind == TokenKind::Where {
             self.bump();
@@ -231,7 +230,7 @@ impl<'src> Parser<'src> {
             }
             let op = op;
             self.bump();
-            let mut right = self.parse_binary_op(prec + 1)?;
+            let right = self.parse_binary_op(prec + 1)?;
             left = Expr::BinaryOp {
                 left: Box::new(left),
                 op,

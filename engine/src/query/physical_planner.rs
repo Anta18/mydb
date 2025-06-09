@@ -1,8 +1,9 @@
-// src/sql/physical_planner.rs
+// src/query/physical_planner.rs
 
-use crate::sql::binder::{BinaryOp, BoundExpr, DataType};
-use crate::sql::optimizer::Optimizer;
-use crate::sql::planner::LogicalPlan;
+use crate::query::binder::{BoundExpr, DataType};
+use crate::query::optimizer::Optimizer;
+use crate::query::parser::BinaryOp; // Import BinaryOp from parser module
+use crate::query::planner::LogicalPlan;
 use crate::storage::storage::Storage;
 use anyhow::{Result, bail};
 
@@ -58,13 +59,13 @@ pub enum PhysicalPlan {
 
 /// Transforms optimized logical plans into physical plans by picking algorithms.
 pub struct PhysicalPlanner<'a> {
-    catalog: &'a crate::sql::binder::Catalog,
+    catalog: &'a crate::query::binder::Catalog,
     storage: &'a mut Storage,
 }
 
 impl<'a> PhysicalPlanner<'a> {
     /// Create a new physical planner with catalog & storage access.
-    pub fn new(catalog: &'a crate::sql::binder::Catalog, storage: &'a mut Storage) -> Self {
+    pub fn new(catalog: &'a crate::query::binder::Catalog, storage: &'a mut Storage) -> Self {
         PhysicalPlanner { catalog, storage }
     }
 
@@ -104,16 +105,18 @@ impl<'a> PhysicalPlanner<'a> {
             } => {
                 if let Some(pred) = predicate.clone() {
                     // if predicate is simple equality on a primary key, use index
-                    if let Some((col, op, lit)) = Self::extract_eq_pred(&pred) {
-                        if let Some(idx_name) = self.catalog.get_primary_index(&table, &col) {
-                            return Ok(PhysicalPlan::IndexScan {
-                                table_name: table,
-                                index_name: idx_name,
-                                predicate: pred,
-                            });
-                        }
+                    if let Some((col, _op, _lit)) = Self::extract_eq_pred(&pred) {
+                        // For now, we'll skip index optimization since get_primary_index doesn't exist
+                        // This is where you'd check for available indexes:
+                        // if let Some(idx_name) = self.get_primary_index(&table, &col) {
+                        //     return Ok(PhysicalPlan::IndexScan {
+                        //         table_name: table,
+                        //         index_name: idx_name,
+                        //         predicate: pred,
+                        //     });
+                        // }
                     }
-                    // else fall through to scan + filter
+                    // Fall through to scan + filter
                 }
 
                 let mut plan = PhysicalPlan::SeqScan {
@@ -157,12 +160,22 @@ impl<'a> PhysicalPlanner<'a> {
         {
             // Only handle column = literal
             if let BoundExpr::Column { ref col, .. } = **left {
-                return Some((col.clone(), BinaryOp::Eq, (*right).clone()));
+                return Some((col.clone(), BinaryOp::Eq, (**right).clone())); // Dereference the Box
             }
             if let BoundExpr::Column { ref col, .. } = **right {
-                return Some((col.clone(), BinaryOp::Eq, (*left).clone()));
+                return Some((col.clone(), BinaryOp::Eq, (**left).clone())); // Dereference the Box
             }
         }
+        None
+    }
+
+    // Helper method placeholder for index lookup
+    // You would need to implement this based on your catalog structure
+    #[allow(dead_code)]
+    fn get_primary_index(&self, table: &str, col: &str) -> Option<String> {
+        // This is a placeholder implementation
+        // You would need to add index metadata to your Catalog struct
+        // and implement the actual index lookup logic here
         None
     }
 }

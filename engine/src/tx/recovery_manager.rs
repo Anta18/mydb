@@ -9,17 +9,34 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
+
+/// A log record header (making fields public for recovery).
+#[derive(Debug)]
+pub struct LogRecordHeader {
+    pub lsn: Lsn,
+    pub prev_lsn: Option<Lsn>,
+    pub tx_id: TxId,
+    pub typ: LogRecordType,
+    pub payload_len: u32,
+}
+
+/// A complete log record: header + payload bytes (making fields public for recovery).
+#[derive(Debug)]
+pub struct RecoveryLogRecord {
+    pub header: LogRecordHeader,
+    pub payload: Vec<u8>,
+}
 
 /// RecoveryManager drives crash recovery using the WAL and the storage layer.
 pub struct RecoveryManager {
     wal_path: PathBuf,
-    storage: Arc<Storage>,
+    storage: Arc<Mutex<Storage>>,
 }
 
 impl RecoveryManager {
-    pub fn new(wal_path: PathBuf, storage: Arc<Storage>) -> Self {
+    pub fn new(wal_path: PathBuf, storage: Arc<Mutex<Storage>>) -> Self {
         RecoveryManager { wal_path, storage }
     }
 
@@ -99,10 +116,16 @@ impl RecoveryManager {
                 // payload: [page_no(8)|offset(4)|before(..)|after(..)]
                 let offset = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as u64;
                 let after = &payload[12..];
+
+                // Lock storage for this operation
+                let mut storage = self.storage.lock().unwrap();
+
                 // apply after-image
-                let mut page = self.storage.pagefile.read_page(page_no)?;
+                let mut page = storage.buffer_pool.pagefile.read_page(page_no)?;
                 page[offset as usize..offset as usize + after.len()].copy_from_slice(after);
-                self.storage.pagefile.write_page(page_no, &page)?;
+                storage.buffer_pool.pagefile.write_page(page_no, &page)?;
+
+                // storage lock is automatically released here
             }
         }
         Ok(())
@@ -128,24 +151,31 @@ impl RecoveryManager {
                         // before-image length = rest / 2
                         let half = (payload.len() - 12) / 2;
                         let before = &payload[12..12 + half];
+
+                        // Lock storage for this operation
+                        let mut storage = self.storage.lock().unwrap();
+
                         // apply before-image
-                        let mut page = self.storage.pagefile.read_page(page_no)?;
+                        let mut page = storage.buffer_pool.pagefile.read_page(page_no)?;
                         page[offset as usize..offset as usize + before.len()]
                             .copy_from_slice(before);
-                        self.storage.pagefile.write_page(page_no, &page)?;
+                        storage.buffer_pool.pagefile.write_page(page_no, &page)?;
+
+                        // storage lock is automatically released here
                     }
                     // follow prev_lsn
                     lsn = record.header.prev_lsn.unwrap_or(0);
                 }
                 // write abort for this tx
-                let _ = LogManager::new(self.wal_path.clone()).log_abort(tx)?;
+                let log_manager = LogManager::new(self.wal_path.clone())?;
+                log_manager.log_abort(tx)?;
             }
         }
         Ok(())
     }
 
     /// Read and deserialize the next log record from the current file position.
-    fn next_record(file: &mut File) -> Result<Option<LogRecord>> {
+    fn next_record(file: &mut File) -> Result<Option<RecoveryLogRecord>> {
         let mut len_buf = [0u8; 4];
         if file.read_exact(&mut len_buf).is_err() {
             return Ok(None);
@@ -158,7 +188,7 @@ impl RecoveryManager {
 
     /// Fetch a specific log record by scanning forward to its LSN.
     /// Inefficient but acceptable for recovery on small logs.
-    fn fetch_record(&self, target_lsn: Lsn) -> Result<LogRecord> {
+    fn fetch_record(&self, target_lsn: Lsn) -> Result<RecoveryLogRecord> {
         let mut file = File::open(&self.wal_path)?;
         while let Some(record) = Self::next_record(&mut file)? {
             if record.header.lsn == target_lsn {
@@ -169,7 +199,7 @@ impl RecoveryManager {
     }
 
     /// Deserialize header+payload from record bytes.
-    fn deserialize_record(buf: &[u8]) -> Result<LogRecord> {
+    fn deserialize_record(buf: &[u8]) -> Result<RecoveryLogRecord> {
         // skip size, already removed
         let mut pos = 0;
         let read_u64 = |b: &[u8]| u64::from_le_bytes(b.try_into().unwrap());
@@ -190,8 +220,8 @@ impl RecoveryManager {
         let payload_len = u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         let payload = buf[pos..pos + payload_len].to_vec();
-        Ok(LogRecord {
-            header: crate::tx::log_manager::LogRecordHeader {
+        Ok(RecoveryLogRecord {
+            header: LogRecordHeader {
                 lsn,
                 prev_lsn: if prev == 0 { None } else { Some(prev) },
                 tx_id,

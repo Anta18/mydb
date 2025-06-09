@@ -15,7 +15,7 @@ pub type Lsn = u64;
 pub type TxId = u64;
 
 /// Types of log records.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogRecordType {
     Begin,
     Commit,
