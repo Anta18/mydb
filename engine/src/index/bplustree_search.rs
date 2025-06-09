@@ -1,7 +1,7 @@
 use crate::index::node_serializer::{
     InternalNodeSerializer, LeafNodeSerializer, NodeHeader, NodeType,
 };
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use anyhow::{Context, Result};
 
 /// Provides search path traversal for a B+Tree.

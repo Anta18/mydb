@@ -12,7 +12,7 @@ use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 
 use crate::sql::executor::Executor;
 use crate::sql::parser::Parser;
-use crate::storage::Storage;
+use crate::storage::storage::Storage;
 use crate::tx::{log_manager::LogManager, recovery_manager::RecoveryManager};
 
 #[derive(Deserialize)]
