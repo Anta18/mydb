@@ -1,3 +1,4 @@
+// storage/free_list.rs
 use std::collections::HashMap;
 
 /// Tracks free space for pages and provides first-fit allocation.

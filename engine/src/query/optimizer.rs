@@ -1,4 +1,4 @@
-// src/query/optimizer.rs
+// query/optimizer.rs
 
 use crate::query::binder::BoundExpr;
 use crate::query::parser::BinaryOp; // Import BinaryOp from parser module

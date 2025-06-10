@@ -1,4 +1,4 @@
-// src/tx/lock_manager.rs
+// tx/lock_manager.rs
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},

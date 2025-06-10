@@ -1,4 +1,4 @@
-// src/tx/log_manager.rs
+// tx/log_manager.rs
 
 use anyhow::{Context, Result};
 use std::{

@@ -1,3 +1,4 @@
+// cli/shell.rs
 use crate::net::client::SqlClient;
 use anyhow::Result;
 use rustyline::{Editor, error::ReadlineError};

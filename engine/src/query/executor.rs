@@ -1,4 +1,4 @@
-// src/query/executor.rs
+// query/executor.rs
 
 use crate::index::bplustree::BPlusTree;
 use crate::index::node_serializer::NodeType;

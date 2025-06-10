@@ -1,4 +1,4 @@
-// src/query/physical_planner.rs
+// query/physical_planner.rs
 
 use crate::query::binder::{BoundExpr, DataType};
 use crate::query::optimizer::Optimizer;

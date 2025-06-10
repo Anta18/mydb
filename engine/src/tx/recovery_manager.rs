@@ -1,4 +1,4 @@
-// src/tx/recovery_manager.rs
+// tx/recovery_manager.rs
 
 use crate::storage::pagefile::PageFile;
 use crate::storage::storage::Storage;

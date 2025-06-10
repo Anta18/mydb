@@ -1,4 +1,4 @@
-// src/query/lexer.rs
+// query/lexer.rs
 
 use std::iter::Peekable;
 use std::str::Chars;

@@ -1,4 +1,4 @@
-// src/query/binder.rs
+// query/binder.rs
 
 use crate::query::parser::{BinaryOp, Expr as RawExpr, Statement as RawStmt, Value as RawValue};
 use crate::storage::storage::Storage;
