@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = "0.6"
+axum = { version = "0.7", features = ["json", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tower-cookies = "0.5"
@@ -15,3 +15,8 @@ rustyline = "10.0"
 criterion = "0.4"
 csv = "1.1"
 byteorder = "1.5.0"
+bincode = "2.0.1"
+hyper = "1.6.0"
+hyper-util = "0.1.14"
+bytes = "1.10.1"
+http-body-util = "0.1.3"

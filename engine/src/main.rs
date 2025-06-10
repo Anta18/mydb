@@ -1,6 +1,10 @@
+use anyhow::Context;
+use engine::{cli::shell::run_shell, storage::storage::Storage};
 use std::{net::SocketAddr, path::PathBuf};
-use engine::{cli::shell::run_shell, net::server::run_server, storage::storage::Storage};
 use tokio::runtime::Runtime;
+
+// Import the server function from your server module
+use engine::net::server::run_server;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -8,22 +12,30 @@ fn main() -> anyhow::Result<()> {
         eprintln!("Usage: {} <server|shell>", args[0]);
         std::process::exit(1);
     }
+
     match args[1].as_str() {
         "server" => {
-            let addr: SocketAddr = "127.0.0.1:3000".parse().unwrap();
-            let storage = Storage::new("data.db", 4096, 10)?;
+            let addr: SocketAddr = "127.0.0.1:3000"
+                .parse()
+                .context("Failed to parse server address")?;
+            let storage =
+                Storage::new("data.db", 4096, 10).context("Failed to initialize storage")?;
             let wal = PathBuf::from("wal.log");
-            let rt = Runtime::new().unwrap();
-            rt.block_on(run_server(addr, storage, wal));
+
+            let rt = Runtime::new().context("Failed to create Tokio runtime")?;
+
+            rt.block_on(async { run_server(addr, storage, wal).await })?;
         }
         "shell" => {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(run_shell("http://127.0.0.1:3000"))?;
+            let rt = Runtime::new().context("Failed to create Tokio runtime")?;
+
+            rt.block_on(async { run_shell("http://127.0.0.1:3000").await })?;
         }
         other => {
             eprintln!("Unknown command: {}", other);
             std::process::exit(1);
         }
     }
+
     Ok(())
 }

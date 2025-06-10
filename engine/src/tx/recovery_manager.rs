@@ -9,8 +9,9 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use tokio::sync::RwLock; // Changed from std::sync::Mutex
 
 /// A log record header (making fields public for recovery).
 #[derive(Debug)]
@@ -32,25 +33,26 @@ pub struct RecoveryLogRecord {
 /// RecoveryManager drives crash recovery using the WAL and the storage layer.
 pub struct RecoveryManager {
     wal_path: PathBuf,
-    storage: Arc<Mutex<Storage>>,
+    storage: Arc<RwLock<Storage>>, // Changed from Mutex to RwLock
 }
 
 impl RecoveryManager {
-    pub fn new(wal_path: PathBuf, storage: Arc<Mutex<Storage>>) -> Self {
+    pub fn new(wal_path: PathBuf, storage: Arc<RwLock<Storage>>) -> Self {
         RecoveryManager { wal_path, storage }
     }
 
     /// Run full recovery: analysis, redo, undo.
-    pub fn recover(&self) -> Result<()> {
+    pub async fn recover(&self) -> Result<()> {
+        // Made async
         // Open WAL
         let mut file = File::open(&self.wal_path)
             .with_context(|| format!("opening WAL file for recovery: {:?}", self.wal_path))?;
         // 1. Analysis pass
         let (dirty_pages, tx_status, tx_last_lsn) = self.analysis_pass(&mut file)?;
         // 2. Redo pass
-        self.redo_pass(&mut file, &dirty_pages)?;
+        self.redo_pass(&mut file, &dirty_pages).await?; // Made async
         // 3. Undo pass
-        self.undo_pass(&tx_status, &tx_last_lsn)?;
+        self.undo_pass(&tx_status, &tx_last_lsn).await?; // Made async
         Ok(())
     }
 
@@ -104,7 +106,8 @@ impl RecoveryManager {
     }
 
     /// Redo all updates for pages still marked dirty, in LSN order.
-    fn redo_pass(&self, file: &mut File, dirty_pages: &HashSet<u64>) -> Result<()> {
+    async fn redo_pass(&self, file: &mut File, dirty_pages: &HashSet<u64>) -> Result<()> {
+        // Made async
         file.rewind()?;
         while let Some(record) = Self::next_record(file)? {
             if record.header.typ == LogRecordType::Update {
@@ -118,7 +121,7 @@ impl RecoveryManager {
                 let after = &payload[12..];
 
                 // Lock storage for this operation
-                let mut storage = self.storage.lock().unwrap();
+                let mut storage = self.storage.write().await; // Changed to async write lock
 
                 // apply after-image
                 let mut page = storage.buffer_pool.pagefile.read_page(page_no)?;
@@ -132,7 +135,8 @@ impl RecoveryManager {
     }
 
     /// Undo any uncommitted transactions by walking their LSN chain backward.
-    fn undo_pass(
+    async fn undo_pass(
+        // Made async
         &self,
         tx_status: &HashMap<TxId, Option<bool>>,
         tx_last_lsn: &HashMap<TxId, Lsn>,
@@ -153,7 +157,7 @@ impl RecoveryManager {
                         let before = &payload[12..12 + half];
 
                         // Lock storage for this operation
-                        let mut storage = self.storage.lock().unwrap();
+                        let mut storage = self.storage.write().await; // Changed to async write lock
 
                         // apply before-image
                         let mut page = storage.buffer_pool.pagefile.read_page(page_no)?;
