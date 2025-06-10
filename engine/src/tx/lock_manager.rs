@@ -82,30 +82,36 @@ impl LockManager {
         // Create one-shot channel to await grant
         let (tx_wake, rx_wake) = tokio::sync::oneshot::channel();
 
-        // Enqueue or grant immediately
-        let mut tbl = self.table.lock().unwrap();
-        let state = tbl.entry(res.clone()).or_insert_with(LockState::new);
+        // Enqueue or grant immediately - CRITICAL: Drop the MutexGuard before await
+        let should_wait = {
+            let mut tbl = self.table.lock().unwrap();
+            let state = tbl.entry(res.clone()).or_insert_with(LockState::new);
 
-        let req = LockRequest {
-            tx,
-            mode,
-            waker: tx_wake,
-        };
+            let req = LockRequest {
+                tx,
+                mode,
+                waker: tx_wake,
+            };
 
-        if state.can_grant(&req) {
-            // grant immediately
-            state.holders.push((tx, mode));
-            // notify immediately (drop sender)
-            // but channel needs to fire, so send
-            let _ = req.waker.send(());
-        } else {
-            // enqueue
-            state.queue.push_back(req);
+            if state.can_grant(&req) {
+                // grant immediately
+                state.holders.push((tx, mode));
+                // notify immediately (drop sender)
+                // but channel needs to fire, so send
+                let _ = req.waker.send(());
+                false // don't need to wait
+            } else {
+                // enqueue
+                state.queue.push_back(req);
+                true // need to wait
+            }
+        }; // MutexGuard is dropped here!
+
+        // Only await if we need to wait - this ensures no MutexGuard across await
+        if should_wait {
+            let _ = rx_wake.await;
         }
-        drop(tbl);
 
-        // wait until granted
-        let _ = rx_wake.await;
         Ok(())
     }
 
@@ -114,10 +120,12 @@ impl LockManager {
     pub fn unlock_all(&self, tx: TxId) {
         let mut tbl = self.table.lock().unwrap();
         let resources: Vec<_> = tbl.keys().cloned().collect();
+
         for res in resources {
             if let Some(state) = tbl.get_mut(&res) {
                 // remove from holders
                 state.holders.retain(|&(holder_tx, _)| holder_tx != tx);
+
                 // scan queue, grant in order if possible
                 let mut to_wake = Vec::new();
                 let mut i = 0;
@@ -140,12 +148,15 @@ impl LockManager {
                         break;
                     }
                 }
-                // wake up outside the table lock
-                drop(tbl);
-                for w in to_wake {
-                    let _ = w.send(());
+
+                // Wake up outside the table lock to avoid holding lock during async operations
+                if !to_wake.is_empty() {
+                    drop(tbl);
+                    for w in to_wake {
+                        let _ = w.send(());
+                    }
+                    tbl = self.table.lock().unwrap();
                 }
-                tbl = self.table.lock().unwrap();
             }
         }
     }
@@ -167,6 +178,7 @@ impl LockManager {
             }
         }
         drop(tbl);
+
         // detect cycle with DFS
         let mut visited = HashSet::new();
         let mut stack = Vec::new();

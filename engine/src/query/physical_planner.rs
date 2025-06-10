@@ -2,7 +2,7 @@
 
 use crate::query::binder::{BoundExpr, DataType};
 use crate::query::optimizer::Optimizer;
-use crate::query::parser::BinaryOp; // Import BinaryOp from parser module
+use crate::query::parser::BinaryOp;
 use crate::query::planner::LogicalPlan;
 use crate::storage::storage::Storage;
 use anyhow::{Result, bail};
@@ -20,6 +20,9 @@ pub enum PhysicalPlan {
         columns: Vec<(String, DataType)>,
     },
 
+    /// Create an index (handled at bind time, no runtime action).
+    // (Optional: you can add a CreateIndex variant if you want explicit DDL execution.)
+
     /// Insert a single row (DML).
     Insert {
         table_name: String,
@@ -33,7 +36,7 @@ pub enum PhysicalPlan {
         predicate: Option<BoundExpr>,
     },
 
-    /// An index‐based scan using a B⁺-tree.
+    /// An index-based scan using a B⁺-tree.
     IndexScan {
         table_name: String,
         index_name: String,
@@ -69,17 +72,16 @@ impl<'a> PhysicalPlanner<'a> {
         PhysicalPlanner { catalog, storage }
     }
 
-    /// Entry point: take a bound & optimized logical plan, produce a physical plan.
+    /// Entry point: take an optimized logical plan, produce a physical plan.
     pub fn create_physical_plan(&mut self, logical: LogicalPlan) -> Result<PhysicalPlan> {
-        // First apply optimizer to the logical plan
-        let optimized = Optimizer::optimize(logical)?;
-        self.plan_node(optimized)
+        // Already optimized by caller, but we can ensure fixpoint again if desired
+        self.plan_node(logical)
     }
 
     fn plan_node(&mut self, node: LogicalPlan) -> Result<PhysicalPlan> {
         use LogicalPlan::*;
         match node {
-            // DDL and DML map directly
+            // DDL and DML
             CreateTable {
                 table_name,
                 columns,
@@ -87,6 +89,13 @@ impl<'a> PhysicalPlanner<'a> {
                 table_name,
                 columns,
             }),
+
+            CreateIndex { .. } => {
+                // index was created at bind time; no runtime action
+                // you could emit a no-op or separate variant
+                bail!("CreateIndex should have been handled at bind time");
+            }
+
             Insert {
                 table_name,
                 col_ordinals,
@@ -97,28 +106,23 @@ impl<'a> PhysicalPlanner<'a> {
                 values,
             }),
 
-            // For SELECT, choose between index scan or full scan + filter
-            SeqScan {
-                table,
-                alias: _,
-                predicate,
-            } => {
+            // SELECT: prefer index scan if possible
+            SeqScan { table, predicate } => {
                 if let Some(pred) = predicate.clone() {
-                    // if predicate is simple equality on a primary key, use index
                     if let Some((col, _op, _lit)) = Self::extract_eq_pred(&pred) {
-                        // For now, we'll skip index optimization since get_primary_index doesn't exist
-                        // This is where you'd check for available indexes:
-                        // if let Some(idx_name) = self.get_primary_index(&table, &col) {
-                        //     return Ok(PhysicalPlan::IndexScan {
-                        //         table_name: table,
-                        //         index_name: idx_name,
-                        //         predicate: pred,
-                        //     });
-                        // }
+                        // check for matching index metadata
+                        for idx in self.storage.get_indexes(&table) {
+                            if idx.column == col {
+                                return Ok(PhysicalPlan::IndexScan {
+                                    table_name: table.clone(),
+                                    index_name: idx.name.clone(),
+                                    predicate: pred,
+                                });
+                            }
+                        }
                     }
-                    // Fall through to scan + filter
                 }
-
+                // fallback to full scan + optional filter
                 let mut plan = PhysicalPlan::SeqScan {
                     table_name: table.clone(),
                     predicate: None,
@@ -139,6 +143,7 @@ impl<'a> PhysicalPlanner<'a> {
                     predicate,
                 })
             }
+
             Projection { input, exprs } => {
                 let child = self.plan_node(*input)?;
                 Ok(PhysicalPlan::Projection {
@@ -158,24 +163,13 @@ impl<'a> PhysicalPlanner<'a> {
             ..
         } = expr
         {
-            // Only handle column = literal
             if let BoundExpr::Column { ref col, .. } = **left {
-                return Some((col.clone(), BinaryOp::Eq, (**right).clone())); // Dereference the Box
+                return Some((col.clone(), BinaryOp::Eq, (**right).clone()));
             }
             if let BoundExpr::Column { ref col, .. } = **right {
-                return Some((col.clone(), BinaryOp::Eq, (**left).clone())); // Dereference the Box
+                return Some((col.clone(), BinaryOp::Eq, (**left).clone()));
             }
         }
-        None
-    }
-
-    // Helper method placeholder for index lookup
-    // You would need to implement this based on your catalog structure
-    #[allow(dead_code)]
-    fn get_primary_index(&self, table: &str, col: &str) -> Option<String> {
-        // This is a placeholder implementation
-        // You would need to add index metadata to your Catalog struct
-        // and implement the actual index lookup logic here
         None
     }
 }

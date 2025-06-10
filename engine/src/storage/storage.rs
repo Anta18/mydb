@@ -1,4 +1,4 @@
-// storage/storage.rs
+use crate::index::node_serializer::{LeafNodeSerializer, NodeHeader, NodeType};
 use crate::storage::{
     buffer_pool::BufferPool,
     free_list::FreeList,
@@ -7,6 +7,21 @@ use crate::storage::{
 };
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+
+/// Metadata for a B⁺-tree index
+#[derive(Debug, Clone)]
+pub struct IndexInfo {
+    /// Logical name of the index
+    pub name: String,
+    /// Table it indexes
+    pub table: String,
+    /// Column this index is on
+    pub column: String,
+    /// B⁺-tree order
+    pub order: usize,
+    /// Root page number of the tree
+    pub root_page: u64,
+}
 
 /// Column metadata
 #[derive(Debug, Clone)]
@@ -29,16 +44,18 @@ pub struct TableInfo {
     pub records: Vec<RID>, // Track all records in this table
 }
 
-/// System catalog for managing table metadata
+/// System catalog for managing table and index metadata
 #[derive(Debug)]
 pub struct Catalog {
     pub tables: HashMap<String, TableInfo>,
+    pub indexes: HashMap<String, Vec<IndexInfo>>, // table_name → list of indexes
 }
 
 impl Catalog {
     pub fn new() -> Self {
-        Self {
+        Catalog {
             tables: HashMap::new(),
+            indexes: HashMap::new(),
         }
     }
 
@@ -46,13 +63,11 @@ impl Catalog {
         if self.tables.contains_key(&name) {
             return Err(anyhow!("Table '{}' already exists", name));
         }
-
         let table_info = TableInfo {
             name: name.clone(),
             columns,
             records: Vec::new(),
         };
-
         self.tables.insert(name, table_info);
         Ok(())
     }
@@ -67,6 +82,33 @@ impl Catalog {
         self.tables
             .get_mut(name)
             .ok_or_else(|| anyhow!("Table '{}' not found", name))
+    }
+
+    /// Register a new index in the catalog
+    pub fn create_index(
+        &mut self,
+        table: String,
+        column: String,
+        index_name: String,
+        order: usize,
+        root_page: u64,
+    ) {
+        let info = IndexInfo {
+            name: index_name,
+            table: table.clone(),
+            column,
+            order,
+            root_page,
+        };
+        self.indexes
+            .entry(table)
+            .or_insert_with(Vec::new)
+            .push(info);
+    }
+
+    /// Get all indexes defined on a table
+    pub fn get_indexes(&self, table: &str) -> Vec<IndexInfo> {
+        self.indexes.get(table).cloned().unwrap_or_default()
     }
 }
 
@@ -95,29 +137,20 @@ impl Storage {
     /// Insert a new record, returning its RID
     pub fn insert(&mut self, data: &[u8]) -> Result<RID> {
         let needed = data.len() + RecordPage::SLOT_ENTRY_SIZE;
-        // choose existing page or allocate new
         let page_no = if let Some(pn) = self.free_list.choose_page(needed) {
             pn
         } else {
             let pn = self.buffer_pool.pagefile.allocate_page()?;
-            // register fresh page
             let page = RecordPage::new(pn, self.page_size);
             self.free_list.register(pn, page.free_space());
             pn
         };
-
-        // fetch into buffer
         let frame = self.buffer_pool.fetch_page(page_no)?;
-        // wrap raw bytes into RecordPage
         let mut page = RecordPage::from_bytes(frame.data.clone(), self.page_size);
-        // insert tuple
         let rid = page.insert_tuple(data)?;
-        // update free space before moving page
         let free_space = page.free_space();
-        // write back
         frame.data = page.to_bytes();
         self.buffer_pool.unpin_page(page_no, true);
-        // update free list
         self.free_list.register(page_no, free_space);
         Ok(rid)
     }
@@ -129,9 +162,7 @@ impl Storage {
         columns: &[String],
         values: Vec<crate::query::binder::Value>,
     ) -> Result<()> {
-        // Validate table exists and columns match
         let table_info = self.catalog.get_table(table_name)?;
-
         if columns.len() != values.len() {
             return Err(anyhow!(
                 "Column count mismatch: {} columns, {} values",
@@ -139,17 +170,10 @@ impl Storage {
                 values.len()
             ));
         }
-
-        // Serialize the row data
         let row_data = self.serialize_row(&values)?;
-
-        // Insert the raw data and get RID
         let rid = self.insert(&row_data)?;
-
-        // Update catalog to track this record
         let table_info = self.catalog.get_table_mut(table_name)?;
         table_info.records.push(rid);
-
         Ok(())
     }
 
@@ -158,19 +182,16 @@ impl Storage {
         &mut self,
         table_name: &str,
     ) -> Result<Vec<Vec<crate::query::binder::Value>>> {
-        // Clone the RIDs to avoid borrowing issues
         let rids = {
             let table_info = self.catalog.get_table(table_name)?;
             table_info.records.clone()
         };
-
         let mut results = Vec::new();
         for rid in rids {
-            let raw_data = self.fetch(rid)?;
-            let values = self.deserialize_row(&raw_data)?;
-            results.push(values);
+            let raw = self.fetch(rid)?;
+            let vals = self.deserialize_row(&raw)?;
+            results.push(vals);
         }
-
         Ok(results)
     }
 
@@ -182,87 +203,56 @@ impl Storage {
     /// Serialize a row of values to bytes
     fn serialize_row(&self, values: &[crate::query::binder::Value]) -> Result<Vec<u8>> {
         let mut result = Vec::new();
-
-        // Write number of values
         result.extend_from_slice(&(values.len() as u32).to_le_bytes());
-
         for value in values {
             match value {
                 crate::query::binder::Value::Int(i) => {
-                    result.push(0); // Type tag for Int
+                    result.push(0);
                     result.extend_from_slice(&i.to_le_bytes());
                 }
                 crate::query::binder::Value::String(s) => {
-                    result.push(1); // Type tag for String
-                    let bytes = s.as_bytes();
-                    result.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-                    result.extend_from_slice(bytes);
+                    result.push(1);
+                    let b = s.as_bytes();
+                    result.extend_from_slice(&(b.len() as u32).to_le_bytes());
+                    result.extend_from_slice(b);
                 }
             }
         }
-
         Ok(result)
     }
 
     /// Deserialize bytes back to values
     fn deserialize_row(&self, data: &[u8]) -> Result<Vec<crate::query::binder::Value>> {
         let mut cursor = 0;
-        let mut values = Vec::new();
-
         if data.len() < 4 {
             return Err(anyhow!("Invalid row data: too short"));
         }
-
-        // Read number of values
         let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
         cursor += 4;
-
+        let mut values = Vec::with_capacity(count);
         for _ in 0..count {
-            if cursor >= data.len() {
-                return Err(anyhow!("Invalid row data: unexpected end"));
-            }
-
-            let type_tag = data[cursor];
+            let tag = data[cursor];
             cursor += 1;
-
-            match type_tag {
+            match tag {
                 0 => {
-                    // Int
-                    if cursor + 8 > data.len() {
-                        return Err(anyhow!("Invalid row data: insufficient data for int"));
-                    }
-                    let mut bytes = [0u8; 8];
-                    bytes.copy_from_slice(&data[cursor..cursor + 8]);
-                    let value = i64::from_le_bytes(bytes);
-                    values.push(crate::query::binder::Value::Int(value));
+                    let mut b = [0u8; 8];
+                    b.copy_from_slice(&data[cursor..cursor + 8]);
+                    let v = i64::from_le_bytes(b);
+                    values.push(crate::query::binder::Value::Int(v));
                     cursor += 8;
                 }
                 1 => {
-                    // String
-                    if cursor + 4 > data.len() {
-                        return Err(anyhow!(
-                            "Invalid row data: insufficient data for string length"
-                        ));
-                    }
-                    let mut len_bytes = [0u8; 4];
-                    len_bytes.copy_from_slice(&data[cursor..cursor + 4]);
-                    let len = u32::from_le_bytes(len_bytes) as usize;
+                    let mut lb = [0u8; 4];
+                    lb.copy_from_slice(&data[cursor..cursor + 4]);
+                    let len = u32::from_le_bytes(lb) as usize;
                     cursor += 4;
-
-                    if cursor + len > data.len() {
-                        return Err(anyhow!("Invalid row data: insufficient data for string"));
-                    }
-
-                    let string_bytes = &data[cursor..cursor + len];
-                    let value = String::from_utf8(string_bytes.to_vec())
-                        .map_err(|e| anyhow!("Invalid UTF-8 in string: {}", e))?;
-                    values.push(crate::query::binder::Value::String(value));
+                    let s = String::from_utf8(data[cursor..cursor + len].to_vec())?;
+                    values.push(crate::query::binder::Value::String(s));
                     cursor += len;
                 }
-                _ => return Err(anyhow!("Invalid type tag: {}", type_tag)),
+                _ => return Err(anyhow!("Invalid type tag: {}", tag)),
             }
         }
-
         Ok(values)
     }
 
@@ -273,7 +263,7 @@ impl Storage {
         let page = RecordPage::from_bytes(frame.data.clone(), self.page_size);
         let rec = page
             .get_tuple(slot_no)
-            .ok_or_else(|| anyhow::anyhow!("Record not found"))?;
+            .ok_or_else(|| anyhow!("Record not found"))?;
         self.buffer_pool.unpin_page(page_no, false);
         Ok(rec.to_vec())
     }
@@ -282,5 +272,48 @@ impl Storage {
     pub fn flush(&mut self) -> Result<()> {
         self.buffer_pool.flush_all()?;
         Ok(())
+    }
+
+    /// Create a new B⁺-tree index on `table_name(column)` called `index_name`.
+    pub fn create_index(
+        &mut self,
+        table_name: &str,
+        column: &str,
+        index_name: &str,
+        order: usize,
+    ) -> Result<u64> {
+        // Validate
+        self.catalog.get_table(table_name)?;
+        // Allocate
+        let root = self.buffer_pool.pagefile.allocate_page()?;
+        // Initialize leaf
+        let hdr = NodeHeader {
+            node_type: NodeType::Leaf,
+            key_count: 0,
+            parent: 0,
+        };
+        let buf = LeafNodeSerializer { order }.serialize(&hdr, &[], &[], 0, self.page_size);
+        {
+            let frame = self.buffer_pool.fetch_page(root)?;
+            frame.data.copy_from_slice(&buf);
+            self.buffer_pool.unpin_page(root, true);
+        }
+        // Register space
+        let free = self.page_size.saturating_sub(buf.len());
+        self.free_list.register(root, free);
+        // Catalog
+        self.catalog.create_index(
+            table_name.to_string(),
+            column.to_string(),
+            index_name.to_string(),
+            order,
+            root,
+        );
+        Ok(root)
+    }
+
+    /// Retrieve all indexes on a table
+    pub fn get_indexes(&self, table_name: &str) -> Vec<IndexInfo> {
+        self.catalog.get_indexes(table_name)
     }
 }

@@ -1,10 +1,9 @@
 // query/optimizer.rs
 
 use crate::query::binder::BoundExpr;
-use crate::query::parser::BinaryOp; // Import BinaryOp from parser module
+use crate::query::parser::BinaryOp;
 use crate::query::planner::LogicalPlan;
 use anyhow::Result;
-use std::sync::Arc;
 
 /// A simple rule‐based optimizer for our logical plans.
 pub struct Optimizer;
@@ -13,14 +12,12 @@ impl Optimizer {
     /// Optimize the given logical plan by repeatedly applying rewrite rules to
     /// push filters down, push projections down, and remove redundant nodes.
     pub fn optimize(plan: LogicalPlan) -> Result<LogicalPlan> {
-        // We do a fixpoint iteration: keep applying rewrite until no change.
         let mut current = plan;
         loop {
             let next = Self::rewrite(&current)?;
             if std::mem::discriminant(&next) == std::mem::discriminant(&current)
-                && format!("{:?}", &next) == format!("{:?}", &current)
+                && format!("{:?}", next) == format!("{:?}", current)
             {
-                // no structural change
                 break Ok(next);
             }
             current = next;
@@ -30,49 +27,46 @@ impl Optimizer {
     /// Single‐pass rewrite: apply each rule bottom‐up.
     fn rewrite(plan: &LogicalPlan) -> Result<LogicalPlan> {
         use LogicalPlan::*;
-        // First recursively rewrite children
+
+        // Recursively rewrite children first
         let rewritten = match plan {
-            CreateTable { .. } | Insert { .. } => plan.clone(),
+            CreateTable { .. } | CreateIndex { .. } | Insert { .. } => plan.clone(),
 
             // SeqScan has no children
-            SeqScan {
-                table,
-                alias,
-                predicate,
-            } => SeqScan {
+            SeqScan { table, predicate } => SeqScan {
                 table: table.clone(),
-                alias: alias.clone(),
                 predicate: predicate.clone(),
             },
 
-            // Rewrite input, then rebuild
+            // Rewrite input of Filter
             Filter { input, predicate } => {
-                let input_opt = Self::rewrite(input)?;
+                let new_input = Self::rewrite(input)?;
                 Filter {
-                    input: Box::new(input_opt), // Remove Arc wrapper and double clone
+                    input: Box::new(new_input),
                     predicate: predicate.clone(),
                 }
             }
 
+            // Rewrite input of Projection
             Projection { input, exprs } => {
-                let input_opt = Self::rewrite(input)?;
+                let new_input = Self::rewrite(input)?;
                 Projection {
-                    input: Box::new(input_opt), // Remove Arc wrapper and double clone
+                    input: Box::new(new_input),
                     exprs: exprs.clone(),
                 }
             }
         };
 
-        // Now apply rewrite rules top‐down on `rewritten`
+        // Now apply local rewrite rules
         Ok(Self::apply_rules(rewritten))
     }
 
-    /// Apply all local transformation rules once.
+    /// Apply top‐down transformation rules once.
     fn apply_rules(plan: LogicalPlan) -> LogicalPlan {
         use LogicalPlan::*;
 
         match plan {
-            // Rule 1: Filter(Filter(X,p1),p2) --> Filter(X, p1 AND p2)
+            // Merge consecutive filters: Filter(Filter(X,p1),p2) → Filter(X, p1 AND p2)
             Filter { input, predicate } => {
                 if let Filter {
                     input: inner,
@@ -81,24 +75,24 @@ impl Optimizer {
                 {
                     let combined = BoundExpr::BinaryOp {
                         left: Box::new(p1),
-                        op: BinaryOp::And, // Use BinaryOp from parser module
+                        op: BinaryOp::And,
                         right: Box::new(predicate.clone()),
-                        data_type: crate::query::binder::DataType::Int, // Add missing data_type field
+                        data_type: crate::query::binder::DataType::Int,
                     };
                     return Filter {
                         input: inner,
                         predicate: combined,
                     };
                 }
-                // Rule 2: push Filter below Projection
+                // Push filter below projection: Projection(Filter(X,p),exprs) → Projection(Filter(X,p),exprs)
                 if let Projection {
-                    input: grand,
+                    input: proj_input,
                     exprs,
                 } = *input.clone()
                 {
                     return Projection {
                         input: Box::new(Filter {
-                            input: grand, // Remove Box::new wrapper since grand is already Box<LogicalPlan>
+                            input: proj_input,
                             predicate: predicate.clone(),
                         }),
                         exprs,
@@ -107,11 +101,11 @@ impl Optimizer {
                 Filter { input, predicate }
             }
 
-            // Rule 3: Projection(Projection(X,e1),e2) -> Projection(X,e2)
+            // Merge consecutive projections: Projection(Projection(X,e1),e2) → Projection(X,e2)
             Projection { input, exprs } => {
                 if let Projection {
                     input: inner,
-                    exprs: e1,
+                    exprs: _,
                 } = *input.clone()
                 {
                     return Projection {
@@ -119,14 +113,10 @@ impl Optimizer {
                         exprs,
                     };
                 }
-                // (Optional) Rule 4: Projection(Filter(X,p),exprs) ->
-                // Filter(Projection(X, needed_cols ∪ preds), p)
-                // For brevity, not implemented here.
-
                 Projection { input, exprs }
             }
 
-            // Others unchanged
+            // Everything else unchanged
             other => other,
         }
     }

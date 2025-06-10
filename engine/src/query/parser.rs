@@ -1,7 +1,7 @@
 // query/parser.rs
 
-use crate::query::lexer::{LexError, Lexer, Token, TokenKind};
-use anyhow::{Context, Result, bail};
+use crate::query::lexer::{Lexer, Token, TokenKind};
+use anyhow::{Result, anyhow, bail};
 
 /// AST definitions
 #[derive(Debug, Clone, PartialEq)]
@@ -9,6 +9,11 @@ pub enum Statement {
     CreateTable {
         name: String,
         columns: Vec<(String, String)>,
+    },
+    CreateIndex {
+        index_name: String,
+        table: String,
+        column: String,
     },
     Insert {
         table: String,
@@ -20,7 +25,6 @@ pub enum Statement {
         table: String,
         filter: Option<Expr>,
     },
-    // Extendable: Update, Delete, etc.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,26 +56,24 @@ pub enum BinaryOp {
     Or,
 }
 
-/// Recursive-descent parser
+/// Recursive-descent SQL parser.
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
 }
 
 impl Parser {
-    /// Tokenize and build a new Parser
+    /// Tokenize input and initialize parser.
     pub fn new(src: &str) -> Result<Self> {
         let mut tokens = Vec::new();
         for item in Lexer::new(src) {
-            match item {
-                Ok(tok) => tokens.push(tok),
-                Err(e) => bail!("Lex error: {:?}", e),
-            }
+            // Map LexError into anyhow::Error
+            let tok = item.map_err(|e| anyhow!("Lex error: {:?}", e))?;
+            tokens.push(tok);
         }
         Ok(Parser { tokens, pos: 0 })
     }
 
-    /// Peek at the current token without consuming it.
     fn peek(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&Token {
             kind: TokenKind::EOF,
@@ -80,14 +82,12 @@ impl Parser {
         })
     }
 
-    /// Consume and return the current token (by cloning it).
     fn bump(&mut self) -> Token {
-        let tok = self.peek().clone();
+        let t = self.peek().clone();
         self.pos += 1;
-        tok
+        t
     }
 
-    /// Expect the next token to be `kind`, else error.
     fn expect(&mut self, kind: TokenKind) -> Result<()> {
         let t = self.peek();
         if t.kind == kind {
@@ -104,10 +104,20 @@ impl Parser {
         }
     }
 
-    /// Parse one statement.
+    /// Parse a single SQL statement.
     pub fn parse_statement(&mut self) -> Result<Statement> {
         match &self.peek().kind {
-            TokenKind::Create => self.parse_create_table(),
+            TokenKind::Create => {
+                // Look ahead for "INDEX"
+                if let Some(tok) = self.tokens.get(self.pos + 1) {
+                    if let TokenKind::Identifier(ref s) = tok.kind {
+                        if s.eq_ignore_ascii_case("INDEX") {
+                            return self.parse_create_index();
+                        }
+                    }
+                }
+                self.parse_create_table()
+            }
             TokenKind::Insert => self.parse_insert(),
             TokenKind::Select => self.parse_select(),
             other => bail!("Unexpected token {:?} at start of statement", other),
@@ -135,15 +145,59 @@ impl Parser {
             cols.push((col_name, col_type));
             if self.peek().kind == TokenKind::Comma {
                 self.bump();
-                continue;
+            } else {
+                break;
             }
-            break;
         }
         self.expect(TokenKind::RParen)?;
         self.expect(TokenKind::Semicolon)?;
         Ok(Statement::CreateTable {
             name,
             columns: cols,
+        })
+    }
+
+    fn parse_create_index(&mut self) -> Result<Statement> {
+        self.expect(TokenKind::Create)?;
+        // `INDEX` is lexed as Identifier("INDEX")
+        if let TokenKind::Identifier(ref s) = self.peek().kind {
+            if s.eq_ignore_ascii_case("INDEX") {
+                self.bump();
+            } else {
+                bail!("Expected INDEX");
+            }
+        } else {
+            bail!("Expected INDEX");
+        }
+        let index_name = match self.bump().kind {
+            TokenKind::Identifier(id) => id,
+            _ => bail!("Expected index name"),
+        };
+        // Expect ON
+        if let TokenKind::Identifier(ref s) = self.peek().kind {
+            if s.eq_ignore_ascii_case("ON") {
+                self.bump();
+            } else {
+                bail!("Expected ON");
+            }
+        } else {
+            bail!("Expected ON");
+        }
+        let table = match self.bump().kind {
+            TokenKind::Identifier(id) => id,
+            _ => bail!("Expected table name"),
+        };
+        self.expect(TokenKind::LParen)?;
+        let column = match self.bump().kind {
+            TokenKind::Identifier(id) => id,
+            _ => bail!("Expected column name"),
+        };
+        self.expect(TokenKind::RParen)?;
+        self.expect(TokenKind::Semicolon)?;
+        Ok(Statement::CreateIndex {
+            index_name,
+            table,
+            column,
         })
     }
 
@@ -160,12 +214,12 @@ impl Parser {
             match &self.bump().kind {
                 TokenKind::Identifier(id) => cols.push(id.clone()),
                 _ => bail!("Expected column name"),
-            };
+            }
             if self.peek().kind == TokenKind::Comma {
                 self.bump();
-                continue;
+            } else {
+                break;
             }
-            break;
         }
         self.expect(TokenKind::RParen)?;
         self.expect(TokenKind::Values)?;
@@ -175,9 +229,9 @@ impl Parser {
             vals.push(self.parse_expr()?);
             if self.peek().kind == TokenKind::Comma {
                 self.bump();
-                continue;
+            } else {
+                break;
             }
-            break;
         }
         self.expect(TokenKind::RParen)?;
         self.expect(TokenKind::Semicolon)?;
@@ -195,9 +249,9 @@ impl Parser {
             projections.push(self.parse_expr()?);
             if self.peek().kind == TokenKind::Comma {
                 self.bump();
-                continue;
+            } else {
+                break;
             }
-            break;
         }
         self.expect(TokenKind::From)?;
         let table = match self.bump().kind {
@@ -228,7 +282,6 @@ impl Parser {
             if prec < min_prec {
                 break;
             }
-            let op = op;
             self.bump();
             let right = self.parse_binary_op(prec + 1)?;
             left = Expr::BinaryOp {
@@ -241,15 +294,16 @@ impl Parser {
     }
 
     fn peek_op_prec(&self) -> Option<(BinaryOp, u8)> {
+        use BinaryOp::*;
         match self.peek().kind {
-            TokenKind::Eq => Some((BinaryOp::Eq, 10)),
-            TokenKind::NotEq => Some((BinaryOp::NotEq, 10)),
-            TokenKind::Lt => Some((BinaryOp::Lt, 10)),
-            TokenKind::LtEq => Some((BinaryOp::LtEq, 10)),
-            TokenKind::Gt => Some((BinaryOp::Gt, 10)),
-            TokenKind::GtEq => Some((BinaryOp::GtEq, 10)),
-            TokenKind::And => Some((BinaryOp::And, 5)),
-            TokenKind::Or => Some((BinaryOp::Or, 4)),
+            TokenKind::Eq => Some((Eq, 10)),
+            TokenKind::NotEq => Some((NotEq, 10)),
+            TokenKind::Lt => Some((Lt, 10)),
+            TokenKind::LtEq => Some((LtEq, 10)),
+            TokenKind::Gt => Some((Gt, 10)),
+            TokenKind::GtEq => Some((GtEq, 10)),
+            TokenKind::And => Some((And, 5)),
+            TokenKind::Or => Some((Or, 4)),
             _ => None,
         }
     }
@@ -257,25 +311,25 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expr> {
         match &self.peek().kind {
             TokenKind::Identifier(id) => {
-                let name = id.clone();
+                let c = id.clone();
                 self.bump();
-                Ok(Expr::Column(name))
+                Ok(Expr::Column(c))
             }
             TokenKind::IntLiteral(v) => {
-                let val = *v;
+                let i = *v;
                 self.bump();
-                Ok(Expr::Literal(Value::Int(val)))
+                Ok(Expr::Literal(Value::Int(i)))
             }
             TokenKind::StringLiteral(s) => {
-                let val = s.clone();
+                let s2 = s.clone();
                 self.bump();
-                Ok(Expr::Literal(Value::String(val)))
+                Ok(Expr::Literal(Value::String(s2)))
             }
             TokenKind::LParen => {
                 self.bump();
-                let expr = self.parse_expr()?;
+                let e = self.parse_expr()?;
                 self.expect(TokenKind::RParen)?;
-                Ok(expr)
+                Ok(e)
             }
             other => bail!("Unexpected token in expression: {:?}", other),
         }
