@@ -1,3 +1,4 @@
+// net/client.rs
 use anyhow::Result;
 use reqwest::{Client, Url, cookie::Jar};
 use serde::{Deserialize, Serialize};

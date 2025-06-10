@@ -1,4 +1,4 @@
-// src/query/parser.rs
+// query/parser.rs
 
 use crate::query::lexer::{LexError, Lexer, Token, TokenKind};
 use anyhow::{Context, Result, bail};

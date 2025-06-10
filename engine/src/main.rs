@@ -1,3 +1,4 @@
+// main.rs
 use anyhow::Context;
 use engine::{cli::shell::run_shell, storage::storage::Storage};
 use std::{net::SocketAddr, path::PathBuf};

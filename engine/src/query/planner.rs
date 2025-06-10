@@ -1,4 +1,4 @@
-// src/query/planner.rs
+// query/planner.rs
 
 use crate::query::binder::{
     BoundExpr, BoundStmt, ColumnMeta, DataType, TableMeta, Value as BoundValue,
