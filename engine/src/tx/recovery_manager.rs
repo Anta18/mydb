@@ -1,13 +1,12 @@
 // tx/recovery_manager.rs
 
-use crate::storage::pagefile::PageFile;
 use crate::storage::storage::Storage;
-use crate::tx::log_manager::{LogManager, LogRecord, LogRecordType, Lsn, TxId};
+use crate::tx::log_manager::{LogManager, LogRecordType, Lsn, TxId};
 use anyhow::{Context, Result};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek},
     path::PathBuf,
     sync::Arc,
 };

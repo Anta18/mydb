@@ -35,7 +35,7 @@ impl BPlusTree {
             parent: 0,
         };
         let buf = LeafNodeSerializer { order }.serialize(&header, &[], &[], 0, page_size);
-        let mut frame = storage.buffer_pool.fetch_page(root_page)?;
+        let frame = storage.buffer_pool.fetch_page(root_page)?;
         frame.data = buf;
         storage.buffer_pool.unpin_page(root_page, true);
 

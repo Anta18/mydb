@@ -2,21 +2,21 @@
 
 use crate::{
     query::{
-        binder::{Binder, Catalog as BinderCatalog},
+        binder::{Binder, Catalog as BinderCatalog, Value},
         executor::{Executor, FilterOp, PhysicalOp, ProjectionOp, SeqScanOp},
         optimizer::Optimizer,
         parser::{Parser, Statement},
         physical_planner::PhysicalPlanner,
         planner::Planner as LogicalPlanner,
     },
-    storage::storage::Storage,
+    storage::storage::{ColumnInfo, DataType, Storage},
     tx::{
         lock_manager::{LockManager, LockMode, Resource},
         log_manager::LogManager,
         recovery_manager::RecoveryManager,
     },
 };
-use anyhow::{Context, Result};
+use anyhow::Context;
 use hyper::{
     Method, Request, Response, StatusCode, body::Bytes, server::conn::http1, service::service_fn,
 };
@@ -33,6 +33,24 @@ use std::{
     },
 };
 use tokio::{net::TcpListener, sync::RwLock};
+use tracing::{debug, error, info};
+
+// Simple JSON types for login and query
+#[derive(Deserialize)]
+struct LoginReq {
+    user: String,
+    pass: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct QueryBody {
+    sql: String,
+}
+
+#[derive(Debug, Serialize)]
+struct QueryResponse {
+    rows: Vec<Vec<String>>,
+}
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -44,34 +62,59 @@ struct AppState {
     wal_path: PathBuf,
 }
 
-#[derive(Deserialize)]
-struct QueryBody {
-    query: String,
-}
-
-#[derive(Serialize)]
-struct QueryResponse {
-    rows: Vec<Vec<String>>,
-}
-
 async fn handle_request(
     req: Request<hyper::body::Incoming>,
     state: Arc<AppState>,
 ) -> Result<Response<String>, Infallible> {
+    debug!("Received {} {}", req.method(), req.uri().path());
+
     let response = match (req.method(), req.uri().path()) {
+        // Login endpoint
         (&Method::POST, "/login") => {
-            // unchanged login logic...
-            unimplemented!()
+            let body = match collect_body(req.into_body()).await {
+                Ok(b) => b,
+                Err(e) => {
+                    error!("Failed to read login body: {:#}", e);
+                    return Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Failed to read body".into())
+                        .unwrap());
+                }
+            };
+            let creds: LoginReq = match serde_json::from_slice(&body) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Invalid login JSON: {:#}", e);
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body("Invalid JSON".into())
+                        .unwrap());
+                }
+            };
+            if creds.user == "admin" && creds.pass == "password" {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Set-Cookie", "session_token=secret-token; HttpOnly; Path=/")
+                    .body("Login successful".into())
+                    .unwrap()
+            } else {
+                Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body("Invalid credentials".into())
+                    .unwrap()
+            }
         }
 
+        // SQL query endpoint
         (&Method::POST, "/query") => {
             // Authentication
-            let is_authed = req
+            let authed = req
                 .headers()
                 .get("cookie")
-                .and_then(|hdr| hdr.to_str().ok())
+                .and_then(|h| h.to_str().ok())
                 .map_or(false, |c| c.contains("session_token=secret-token"));
-            if !is_authed {
+            if !authed {
+                error!("Unauthorized query");
                 return Ok(Response::builder()
                     .status(StatusCode::UNAUTHORIZED)
                     .body("Not authenticated".into())
@@ -81,63 +124,79 @@ async fn handle_request(
             // Recovery
             let rm = RecoveryManager::new(state.wal_path.clone(), state.storage.clone());
             if let Err(e) = rm.recover().await {
-                let msg = format!("Recovery error: {e:?}");
+                error!("Recovery failed: {:#}", e);
                 return Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(msg)
+                    .body(format!("Recovery error: {:#}", e))
                     .unwrap());
             }
+            info!("Recovery complete");
 
-            // Read & parse JSON body
-            let body_bytes = match collect_body(req.into_body()).await {
+            // Read JSON
+            let body = match collect_body(req.into_body()).await {
                 Ok(b) => b,
-                Err(_) => {
+                Err(e) => {
+                    error!("Failed to read query body: {:#}", e);
                     return Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body("Failed to read body".into())
+                        .body(format!("Body read error: {:#}", e))
                         .unwrap());
                 }
             };
-            let qb: QueryBody = match serde_json::from_slice(&body_bytes) {
+            debug!("Query body bytes: {:?}", body);
+
+            let qb: QueryBody = match serde_json::from_slice(&body) {
                 Ok(q) => q,
                 Err(e) => {
+                    error!("Invalid query JSON: {:#}", e);
                     return Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(e.to_string())
+                        .body(format!("Invalid JSON: {:#}", e))
                         .unwrap());
                 }
             };
+            debug!("SQL: {:?}", qb.sql);
 
             // Parse SQL → AST
-            let mut parser = match Parser::new(&qb.query) {
+            let mut parser = match Parser::new(&qb.sql) {
                 Ok(p) => p,
                 Err(e) => {
+                    error!("Parser init failed: {:#}", e);
                     return Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(e.to_string())
+                        .body(format!("Parse error: {:#}", e))
                         .unwrap());
                 }
             };
             let stmt = match parser.parse_statement() {
                 Ok(s) => s,
                 Err(e) => {
+                    error!("Parse statement failed: {:#}", e);
                     return Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(e.to_string())
+                        .body(format!("Parse error: {:#}", e))
                         .unwrap());
                 }
             };
+            info!("AST: {:?}", stmt);
 
             // Begin transaction
             let tx_id = TX_COUNTER.fetch_add(1, Ordering::SeqCst);
-            if let Err(e) = state.logmgr.log_begin(tx_id) {
-                return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(format!("WAL begin error: {}", e))
-                    .unwrap());
-            }
+            state
+                .logmgr
+                .log_begin(tx_id)
+                .context("WAL begin failed")
+                .map_err(|e| {
+                    error!("{}", e);
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(format!("WAL begin error: {:#}", e))
+                        .unwrap()
+                })
+                .unwrap();
+            info!("Transaction {} begun", tx_id);
 
-            // Determine and acquire lock
+            // Acquire lock
             let (res, mode) = match &stmt {
                 Statement::Select { table, .. } => {
                     (Resource::Table(table.clone()), LockMode::Shared)
@@ -148,70 +207,167 @@ async fn handle_request(
                     (Resource::Table(table.clone()), LockMode::Exclusive)
                 }
             };
-            if let Err(e) = state.locks.lock(tx_id, res, mode).await {
-                let _ = state.logmgr.log_abort(tx_id);
-                state.locks.unlock_all(tx_id);
-                return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(format!("Lock error: {}", e))
-                    .unwrap());
-            }
-
-            // Lock storage for DDL/DML
-            let mut storage = state.storage.write().await;
-
-            // Binder catalog
-            let mut bind_catalog = BinderCatalog::new();
-
-            // Build executor
-            let mut exec =
-                match create_executor_from_statement(stmt, &mut *storage, &mut bind_catalog) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        let _ = state.logmgr.log_abort(tx_id);
-                        state.locks.unlock_all(tx_id);
-                        return Ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(e.to_string())
-                            .unwrap());
-                    }
-                };
-
-            // Execute
-            let tuples = match exec.execute() {
-                Ok(rows) => rows,
-                Err(e) => {
+            state
+                .locks
+                .lock(tx_id, res.clone(), mode)
+                .await
+                .map_err(|e| {
+                    error!("Lock failed: {}", e);
                     let _ = state.logmgr.log_abort(tx_id);
                     state.locks.unlock_all(tx_id);
-                    return Ok(Response::builder()
+                    Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(e.to_string())
-                        .unwrap());
-                }
-            };
+                        .body(format!("Lock error: {:#}", e))
+                        .unwrap()
+                })
+                .unwrap();
+            info!("Lock acquired: {:?} {:?}", res, mode);
 
-            // Commit
-            if let Err(e) = state.logmgr.log_commit(tx_id) {
+            // Storage write lock
+            let mut storage = state.storage.write().await;
+            let mut bind_catalog = BinderCatalog::new();
+
+            // DDL short-circuit
+            if let Statement::CreateTable { name, columns } = &stmt {
+                let infos = columns
+                    .iter()
+                    .map(|(n, t)| ColumnInfo {
+                        name: n.clone(),
+                        data_type: if t.eq_ignore_ascii_case("INT") {
+                            DataType::Int
+                        } else {
+                            DataType::String
+                        },
+                    })
+                    .collect();
+                storage
+                    .create_table(name.clone(), infos)
+                    .context("CREATE TABLE failed")
+                    .map_err(|e| {
+                        error!("{}", e);
+                        let _ = state.logmgr.log_abort(tx_id);
+                        state.locks.unlock_all(tx_id);
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("CREATE TABLE failed: {:#}", e))
+                            .unwrap()
+                    })
+                    .unwrap();
+                state
+                    .logmgr
+                    .log_commit(tx_id)
+                    .context("WAL commit failed")
+                    .map_err(|e| {
+                        error!("{}", e);
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("WAL commit error: {:#}", e))
+                            .unwrap()
+                    })
+                    .unwrap();
+                state.locks.unlock_all(tx_id);
                 return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(format!("WAL commit error: {}", e))
+                    .status(StatusCode::OK)
+                    .body(String::new())
                     .unwrap());
             }
+            if let Statement::CreateIndex {
+                index_name,
+                table,
+                column,
+            } = &stmt
+            {
+                storage
+                    .create_index(table, column, index_name, 4)
+                    .context("CREATE INDEX failed")
+                    .map_err(|e| {
+                        error!("{}", e);
+                        let _ = state.logmgr.log_abort(tx_id);
+                        state.locks.unlock_all(tx_id);
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("CREATE INDEX failed: {:#}", e))
+                            .unwrap()
+                    })
+                    .unwrap();
+                state
+                    .logmgr
+                    .log_commit(tx_id)
+                    .context("WAL commit failed")
+                    .map_err(|e| {
+                        error!("{}", e);
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("WAL commit error: {:#}", e))
+                            .unwrap()
+                    })
+                    .unwrap();
+                state.locks.unlock_all(tx_id);
+                return Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .body(String::new())
+                    .unwrap());
+            }
+
+            // Build executor
+            let mut exec = create_executor_from_statement(stmt, &mut storage, &mut bind_catalog)
+                .map_err(|e| {
+                    error!("Build failed: {:#}", e);
+                    let _ = state.logmgr.log_abort(tx_id);
+                    state.locks.unlock_all(tx_id);
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(format!("Build error: {:#}", e))
+                        .unwrap()
+                })
+                .unwrap();
+            debug!("Executor built");
+
+            // Execute
+            let tuples = exec
+                .execute()
+                .map_err(|e| {
+                    error!("Exec failed: {:#}", e);
+                    let _ = state.logmgr.log_abort(tx_id);
+                    state.locks.unlock_all(tx_id);
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(format!("Exec error: {:#}", e))
+                        .unwrap()
+                })
+                .unwrap();
+            info!("Executed, {} rows", tuples.len());
+
+            // Commit
+            state
+                .logmgr
+                .log_commit(tx_id)
+                .context("WAL commit failed")
+                .map_err(|e| {
+                    error!("{}", e);
+                    let _ = state.logmgr.log_abort(tx_id);
+                    state.locks.unlock_all(tx_id);
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(format!("WAL commit error: {:#}", e))
+                        .unwrap()
+                })
+                .unwrap();
             state.locks.unlock_all(tx_id);
 
-            // Serialize and respond
+            // Respond
             let rows = tuples
                 .into_iter()
                 .map(|tuple| {
                     tuple
                         .into_iter()
                         .map(|v| match v {
-                            crate::query::binder::Value::Int(i) => i.to_string(),
-                            crate::query::binder::Value::String(s) => s,
+                            Value::Int(i) => i.to_string(),
+                            Value::String(s) => s,
                         })
-                        .collect::<Vec<_>>()
+                        .collect()
                 })
-                .collect::<Vec<_>>();
+                .collect();
             let body = serde_json::to_string(&QueryResponse { rows }).unwrap();
 
             Response::builder()
@@ -221,10 +377,13 @@ async fn handle_request(
                 .unwrap()
         }
 
-        _ => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body("Not found".into())
-            .unwrap(),
+        _ => {
+            error!("Not found: {} {}", req.method(), req.uri().path());
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body("Not found".into())
+                .unwrap()
+        }
     };
 
     Ok(response)
@@ -236,32 +395,26 @@ async fn collect_body(body: hyper::body::Incoming) -> Result<Bytes, hyper::Error
     Ok(collected.to_bytes())
 }
 
-/// Build an Executor by running:
-///   AST → Binder → Logical Planner → Optimizer → Physical Planner → Operator Tree
 fn create_executor_from_statement<'a>(
     stmt: Statement,
     storage: &'a mut Storage,
     bind_catalog: &'a mut BinderCatalog,
 ) -> anyhow::Result<Executor<'a>> {
-    // 1) Bind AST → BoundStmt
+    // 1) Bind
     let mut binder = Binder::new(bind_catalog, storage);
-    let bound = binder.bind(stmt).context("SQL binding failed")?;
-
-    // 2) Logical planning
+    let bound = binder.bind(stmt).context("Bind failed")?;
+    // 2) Logical plan
     let mut lp = LogicalPlanner::new(&bind_catalog.tables, storage);
     let logical = lp.plan(bound).context("Logical planning failed")?;
-
-    // 3) Optimization
-    let optimized = Optimizer::optimize(logical).context("Optimization failed")?;
-
-    // 4) Physical planning
+    // 3) Optimize
+    let optimized = Optimizer::optimize(logical).context("Optimize failed")?;
+    // 4) Physical plan
     let mut pp = PhysicalPlanner::new(bind_catalog, storage);
     let phys = pp
         .create_physical_plan(optimized)
         .context("Physical planning failed")?;
-
-    // 5) Build the operator tree
-    fn build_op<'a>(
+    // 5) Build operator tree
+    fn build<'a>(
         plan: crate::query::physical_planner::PhysicalPlan,
         storage: &'a mut Storage,
         catalog: &'a BinderCatalog,
@@ -273,22 +426,31 @@ fn create_executor_from_statement<'a>(
                 predicate,
             } => Box::new(SeqScanOp::new(storage, catalog, table_name, predicate)),
             Filter { input, predicate } => {
-                let child = build_op(*input, storage, catalog);
+                let child = build(*input, storage, catalog);
                 Box::new(FilterOp::new(child, predicate))
             }
             Projection { input, exprs } => {
-                let child = build_op(*input, storage, catalog);
+                let child = build(*input, storage, catalog);
                 Box::new(ProjectionOp::new(child, exprs))
             }
             other => unimplemented!("PhysicalPlan::{:?}", other),
         }
     }
-
-    let root = build_op(phys, storage, bind_catalog);
+    let root = build(phys, storage, bind_catalog);
     Ok(Executor::new(root))
 }
 
-pub async fn run_server(addr: SocketAddr, storage: Storage, wal_path: PathBuf) -> Result<()> {
+pub async fn run_server(
+    addr: SocketAddr,
+    storage: Storage,
+    wal_path: PathBuf,
+) -> anyhow::Result<()> {
+    // Initialize detailed logging
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
+    info!("Server starting");
+
     let logmgr = Arc::new(LogManager::new(wal_path.clone())?);
     let locks = Arc::new(LockManager::new());
     let state = Arc::new(AppState {
@@ -298,17 +460,19 @@ pub async fn run_server(addr: SocketAddr, storage: Storage, wal_path: PathBuf) -
         wal_path,
     });
 
-    let listener = TcpListener::bind(addr).await.context("Failed to bind")?;
-    println!("Listening on http://{}", addr);
+    let listener = TcpListener::bind(addr).await.context("Bind failed")?;
+    info!("Listening on {}", addr);
 
     loop {
         let (stream, _) = listener.accept().await.context("Accept failed")?;
         let io = TokioIo::new(stream);
         let state = state.clone();
+
         tokio::spawn(async move {
-            let svc = service_fn(move |req| handle_request(req, state.clone()));
-            if let Err(err) = http1::Builder::new().serve_connection(io, svc).await {
-                eprintln!("Connection error: {:?}", err);
+            // Specify correct response-body type
+            let service = service_fn(move |req| handle_request(req, state.clone()));
+            if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                error!("Connection error: {:?}", e);
             }
         });
     }

@@ -1,10 +1,8 @@
 // query/executor.rs
 
 use crate::index::bplustree::BPlusTree;
-use crate::index::node_serializer::NodeType;
 use crate::query::binder::{BoundExpr, Catalog, Value};
 use crate::query::parser::BinaryOp; // Import BinaryOp from parser
-use crate::query::physical_planner::PhysicalPlan;
 use crate::storage::record::RID;
 use crate::storage::storage::Storage;
 use anyhow::{Result, anyhow};

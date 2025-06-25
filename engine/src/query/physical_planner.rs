@@ -1,7 +1,6 @@
 // query/physical_planner.rs
 
 use crate::query::binder::{BoundExpr, DataType};
-use crate::query::optimizer::Optimizer;
 use crate::query::parser::BinaryOp;
 use crate::query::planner::LogicalPlan;
 use crate::storage::storage::Storage;

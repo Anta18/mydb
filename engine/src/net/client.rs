@@ -1,6 +1,6 @@
 // net/client.rs
 use anyhow::Result;
-use reqwest::{Client, Url, cookie::Jar};
+use reqwest::{Client, cookie::Jar};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

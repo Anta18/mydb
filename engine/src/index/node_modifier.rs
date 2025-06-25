@@ -52,7 +52,7 @@ impl<'a> NodeModifier<'a> {
         // Fetch leaf
         let frame = self.storage.buffer_pool.fetch_page(leaf_page)?;
         let buf = &frame.data;
-        let (mut header, mut keys, mut rids, mut next_leaf) = self
+        let (mut header, mut keys, mut rids, next_leaf) = self
             .leaf_serializer
             .deserialize(buf)
             .context("Leaf deserialize failed")?;

@@ -2,7 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::Mutex,
 };
 
 /// A transaction identifier.
@@ -128,7 +128,7 @@ impl LockManager {
 
                 // scan queue, grant in order if possible
                 let mut to_wake = Vec::new();
-                let mut i = 0;
+                let i = 0;
                 while i < state.queue.len() {
                     // check if head can be granted now
                     if state.holders.is_empty()

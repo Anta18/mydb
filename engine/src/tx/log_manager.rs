@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
-    io::{BufWriter, Seek, SeekFrom, Write},
+    io::{BufWriter, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
