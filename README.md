@@ -1,6 +1,6 @@
 # Engine Database
 
-This repository contains a simple experimental SQL database engine written in Rust.
+This repository contains an experimental SQL database engine written in Rust.
 
 ## Building
 
