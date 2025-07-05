@@ -1,4 +1,4 @@
-// index/node_modifier.rs
+
 
 use crate::index::bplustree_search::BPlusTreeSearch;
 use crate::index::node_serializer::{
@@ -8,14 +8,14 @@ use crate::storage::record::RID;
 use crate::storage::storage::Storage;
 use anyhow::{Context, Result};
 
-/// Handles insertion logic and node splits in a B+ Tree with maintained parent pointers,
-/// free-space registration, duplicate-key checks, and optimized split propagation.
+
+
 pub struct NodeModifier<'a> {
     storage: &'a mut Storage,
     order: usize,
     internal_serializer: InternalNodeSerializer,
     leaf_serializer: LeafNodeSerializer,
-    /// Cached path during initial locate to avoid re-traversal
+    
     path_cache: Vec<u64>,
 }
 
@@ -30,14 +30,14 @@ impl<'a> NodeModifier<'a> {
         }
     }
 
-    /// Insert a key -> RID into the B+ tree starting at root_page.
-    /// Returns new root page if split propagates to root.
+    
+    
     pub fn insert(&mut self, root_page: u64, key: u64, rid: RID) -> Result<u64> {
-        // Locate leaf and cache path
+        
         let mut searcher = BPlusTreeSearch::new(self.storage, self.order);
         self.path_cache = searcher.search_path(root_page, key)?;
         let leaf_page = *self.path_cache.last().unwrap();
-        // Insert and handle splits
+        
         let (new_root, _, _) = self.insert_into_leaf(leaf_page, key, rid, root_page)?;
         Ok(new_root)
     }
@@ -49,31 +49,31 @@ impl<'a> NodeModifier<'a> {
         rid: RID,
         root_page: u64,
     ) -> Result<(u64, Option<u64>, Option<u64>)> {
-        // Fetch leaf
+        
         let frame = self.storage.buffer_pool.fetch_page(leaf_page)?;
         let buf = &frame.data;
         let (mut header, mut keys, mut rids, next_leaf) = self
             .leaf_serializer
             .deserialize(buf)
             .context("Leaf deserialize failed")?;
-        // Duplicate-key check
+        
         if keys.binary_search(&key).is_ok() {
             return Err(anyhow::anyhow!("Duplicate key insertion not allowed"));
         }
-        // Insert
+        
         let idx = keys.binary_search(&key).unwrap_or_else(|i| i);
         keys.insert(idx, key);
         rids.insert(idx, rid);
         header.key_count += 1;
 
-        // Update parent pointer on leaf header
+        
         header.parent = *self
             .path_cache
             .get(self.path_cache.len().saturating_sub(2))
             .unwrap_or(&0);
 
         if (header.key_count as usize) <= self.order {
-            // No split: serialize and write back
+            
             let new_buf = self.leaf_serializer.serialize(
                 &header,
                 &keys,
@@ -83,13 +83,13 @@ impl<'a> NodeModifier<'a> {
             );
             frame.data.copy_from_slice(&new_buf);
             self.storage.buffer_pool.unpin_page(leaf_page, true);
-            // register free space for leaf page - calculate free space manually
+            
             let used_space = new_buf.len();
             let free_space = self.storage.page_size.saturating_sub(used_space);
             self.storage.free_list.register(leaf_page, free_space);
             Ok((root_page, None, None))
         } else {
-            // Split leaf - first unpin the current page to avoid double borrow
+            
             self.storage.buffer_pool.unpin_page(leaf_page, false);
 
             let mid = (header.key_count as usize + 1) / 2;
@@ -98,16 +98,16 @@ impl<'a> NodeModifier<'a> {
             header.key_count = keys.len() as u16;
             let split_key = right_keys[0];
 
-            // Allocate right page
+            
             let right_page = self.storage.buffer_pool.pagefile.allocate_page()?;
 
-            // New headers with parent
+            
             let right_header = NodeHeader {
                 node_type: NodeType::Leaf,
                 key_count: right_keys.len() as u16,
                 parent: header.parent,
             };
-            // Serialize buffers
+            
             let left_buf = self.leaf_serializer.serialize(
                 &header,
                 &keys,
@@ -123,14 +123,14 @@ impl<'a> NodeModifier<'a> {
                 self.storage.page_size,
             );
 
-            // Re-fetch and write left page
+            
             let left_frame = self.storage.buffer_pool.fetch_page(leaf_page)?;
             left_frame.data.copy_from_slice(&left_buf);
             self.storage.buffer_pool.unpin_page(leaf_page, true);
             let left_free_space = self.storage.page_size.saturating_sub(left_buf.len());
             self.storage.free_list.register(leaf_page, left_free_space);
 
-            // Write right and register
+            
             let right_frame = self.storage.buffer_pool.fetch_page(right_page)?;
             right_frame.data.copy_from_slice(&right_buf);
             self.storage.buffer_pool.unpin_page(right_page, true);
@@ -139,7 +139,7 @@ impl<'a> NodeModifier<'a> {
                 .free_list
                 .register(right_page, right_free_space);
 
-            // Propagate to parent without re-traversal using path_cache
+            
             let (new_root, _, _) =
                 self.insert_into_parent(root_page, leaf_page, split_key, right_page)?;
             Ok((new_root, Some(split_key), Some(right_page)))
@@ -153,7 +153,7 @@ impl<'a> NodeModifier<'a> {
         split_key: u64,
         right_page: u64,
     ) -> Result<(u64, Option<u64>, Option<u64>)> {
-        // If left was root, create new root
+        
         if left_page == root_page {
             let new_root = self.storage.buffer_pool.pagefile.allocate_page()?;
             let header = NodeHeader {
@@ -170,12 +170,12 @@ impl<'a> NodeModifier<'a> {
             let frame = self.storage.buffer_pool.fetch_page(new_root)?;
             frame.data.copy_from_slice(&buf);
             self.storage.buffer_pool.unpin_page(new_root, true);
-            // register free space
+            
             let free_space = self.storage.page_size.saturating_sub(buf.len());
             self.storage.free_list.register(new_root, free_space);
             Ok((new_root, Some(split_key), Some(right_page)))
         } else {
-            // Use cached path to find parent
+            
             let parent_page = *self.path_cache.get(self.path_cache.len() - 2).unwrap();
             let frame = self.storage.buffer_pool.fetch_page(parent_page)?;
             let buf = &frame.data;
@@ -183,13 +183,13 @@ impl<'a> NodeModifier<'a> {
                 .internal_serializer
                 .deserialize(buf)
                 .context("Internal deserialize failed")?;
-            // Duplicate-key check
+            
             if keys.iter().any(|&k| k == split_key) {
                 return Err(anyhow::anyhow!(
                     "Duplicate key insertion not allowed in internal node"
                 ));
             }
-            // Insert
+            
             let idx = children.iter().position(|&c| c == left_page).unwrap() + 1;
             keys.insert(idx - 1, split_key);
             children.insert(idx, right_page);
@@ -212,7 +212,7 @@ impl<'a> NodeModifier<'a> {
                 self.storage.free_list.register(parent_page, free_space);
                 Ok((root_page, None, None))
             } else {
-                // Split internal - unpin current frame to avoid double borrow
+                
                 self.storage.buffer_pool.unpin_page(parent_page, false);
 
                 let mid = header.key_count as usize / 2;
@@ -222,10 +222,10 @@ impl<'a> NodeModifier<'a> {
                 header.key_count = mid as u16;
                 children.truncate(mid + 1);
 
-                // Allocate right page first
+                
                 let new_right_page = self.storage.buffer_pool.pagefile.allocate_page()?;
 
-                // Serialize left
+                
                 let left_buf = self.internal_serializer.serialize(
                     &header,
                     &keys,
@@ -233,7 +233,7 @@ impl<'a> NodeModifier<'a> {
                     self.storage.page_size,
                 );
 
-                // Re-fetch and write left page
+                
                 let left_frame = self.storage.buffer_pool.fetch_page(parent_page)?;
                 left_frame.data.copy_from_slice(&left_buf);
                 self.storage.buffer_pool.unpin_page(parent_page, true);
@@ -242,7 +242,7 @@ impl<'a> NodeModifier<'a> {
                     .free_list
                     .register(parent_page, left_free_space);
 
-                // Prepare right node
+                
                 let right_header = NodeHeader {
                     node_type: NodeType::Internal,
                     key_count: right_keys.len() as u16,
@@ -262,7 +262,7 @@ impl<'a> NodeModifier<'a> {
                     .free_list
                     .register(new_right_page, right_free_space);
 
-                // Recursively propagate up
+                
                 self.insert_into_parent(root_page, parent_page, promote_key, new_right_page)
             }
         }

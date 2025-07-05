@@ -1,19 +1,19 @@
-// index/node_serializer.rs
+
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Result};
 
-/// NodeType indicates leaf or internal node
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
     Internal = 0,
     Leaf = 1,
 }
 
-/// Common header fields for both node types
+
 pub struct NodeHeader {
-    pub node_type: NodeType, // 1 byte
-    pub key_count: u16,      // 2 bytes
-    pub parent: u64,         // 8 bytes (optional)
+    pub node_type: NodeType, 
+    pub key_count: u16,      
+    pub parent: u64,         
 }
 
 impl NodeHeader {
@@ -52,32 +52,32 @@ impl NodeHeader {
     }
 }
 
-/// Serializer for internal node pages
+
 pub struct InternalNodeSerializer {
     pub order: usize,
 }
 
 impl InternalNodeSerializer {
-    /// Serialize internal node: header + keys + children pointers
-    /// Layout: [header][keys...][children...]
+    
+    
     pub fn serialize(
         &self,
         header: &NodeHeader,
-        keys: &[u64],     // length = key_count
-        children: &[u64], // length = key_count + 1
+        keys: &[u64],     
+        children: &[u64], 
         page_size: usize,
     ) -> Vec<u8> {
         let mut buf = vec![0u8; page_size];
         header.serialize(&mut buf[0..NodeHeader::SIZE]);
         let mut pos = NodeHeader::SIZE;
-        // write keys
+        
         for &key in keys.iter() {
             (&mut buf[pos..pos + 8])
                 .write_u64::<LittleEndian>(key)
                 .unwrap();
             pos += 8;
         }
-        // write children pointers
+        
         for &child in children.iter() {
             (&mut buf[pos..pos + 8])
                 .write_u64::<LittleEndian>(child)
@@ -87,7 +87,7 @@ impl InternalNodeSerializer {
         buf
     }
 
-    /// Deserialize internal node from raw page bytes
+    
     pub fn deserialize(&self, buf: &[u8]) -> Result<(NodeHeader, Vec<u64>, Vec<u64>)> {
         let header = NodeHeader::deserialize(&buf[0..NodeHeader::SIZE])?;
         assert_eq!(header.node_type, NodeType::Internal);
@@ -109,33 +109,33 @@ impl InternalNodeSerializer {
     }
 }
 
-/// Serializer for leaf node pages
+
 pub struct LeafNodeSerializer {
     pub order: usize,
 }
 
 impl LeafNodeSerializer {
-    /// Serialize leaf node: header + keys + rids + next pointer
-    /// Layout: [header][keys...][rids...][next_leaf]
+    
+    
     pub fn serialize(
         &self,
         header: &NodeHeader,
-        keys: &[u64],        // length = key_count
-        rids: &[(u64, u16)], // length = key_count
+        keys: &[u64],        
+        rids: &[(u64, u16)], 
         next_leaf: u64,
         page_size: usize,
     ) -> Vec<u8> {
         let mut buf = vec![0u8; page_size];
         header.serialize(&mut buf[0..NodeHeader::SIZE]);
         let mut pos = NodeHeader::SIZE;
-        // write keys
+        
         for &key in keys.iter() {
             (&mut buf[pos..pos + 8])
                 .write_u64::<LittleEndian>(key)
                 .unwrap();
             pos += 8;
         }
-        // write rids: page_no (8) + slot_no (2)
+        
         for &(page_no, slot_no) in rids.iter() {
             (&mut buf[pos..pos + 8])
                 .write_u64::<LittleEndian>(page_no)
@@ -146,14 +146,14 @@ impl LeafNodeSerializer {
                 .unwrap();
             pos += 2;
         }
-        // write next_leaf pointer
+        
         (&mut buf[pos..pos + 8])
             .write_u64::<LittleEndian>(next_leaf)
             .unwrap();
         buf
     }
 
-    /// Deserialize leaf node from raw page bytes
+    
     pub fn deserialize(&self, buf: &[u8]) -> Result<(NodeHeader, Vec<u64>, Vec<(u64, u16)>, u64)> {
         let header = NodeHeader::deserialize(&buf[0..NodeHeader::SIZE])?;
         assert_eq!(header.node_type, NodeType::Leaf);

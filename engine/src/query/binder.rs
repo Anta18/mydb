@@ -1,11 +1,11 @@
-// query/binder.rs
+
 
 use crate::query::parser::{BinaryOp, Expr as RawExpr, Statement as RawStmt, Value as RawValue};
 use crate::storage::storage::Storage;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 
-/// Column metadata
+
 #[derive(Debug, Clone)]
 pub struct ColumnMeta {
     pub name: String,
@@ -13,7 +13,7 @@ pub struct ColumnMeta {
     pub ordinal: usize,
 }
 
-/// Table metadata
+
 #[derive(Debug, Clone)]
 pub struct TableMeta {
     pub name: String,
@@ -37,7 +37,7 @@ impl DataType {
     }
 }
 
-/// In-memory catalog for binding
+
 pub struct Catalog {
     pub tables: HashMap<String, TableMeta>,
 }
@@ -85,7 +85,7 @@ impl Catalog {
     }
 }
 
-/// Bound statements
+
 #[derive(Debug)]
 pub enum BoundStmt {
     CreateTable {
@@ -110,7 +110,7 @@ pub enum BoundStmt {
     },
 }
 
-/// Bound expressions
+
 #[derive(Debug, Clone)]
 pub enum BoundExpr {
     Column {

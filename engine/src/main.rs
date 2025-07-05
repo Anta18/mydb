@@ -1,10 +1,10 @@
-// main.rs
+
 use anyhow::Context;
 use engine::{cli::shell::run_shell, storage::storage::Storage};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::runtime::Runtime;
 
-// Import the server function from your server module
+
 use engine::net::server::run_server;
 
 fn main() -> anyhow::Result<()> {

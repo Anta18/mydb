@@ -1,11 +1,11 @@
-// cli/shell.rs
+
 use crate::net::client::SqlClient;
 use anyhow::Result;
 use rustyline::{Editor, error::ReadlineError};
 
 pub async fn run_shell(base_url: &str) -> Result<()> {
     let client = SqlClient::new(base_url);
-    // login with prompt
+    
     println!("Username: ");
     let mut rl = Editor::<()>::new()?;
     let user = rl.readline("user> ")?;

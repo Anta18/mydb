@@ -1,4 +1,4 @@
-// storage/storage.rs
+
 
 use crate::index::node_serializer::{LeafNodeSerializer, NodeHeader, NodeType};
 use crate::storage::buffer_pool::BufferPool;
@@ -8,7 +8,7 @@ use crate::storage::record::{Page as RecordPage, RID};
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
-/// Metadata for a B⁺-tree index
+
 #[derive(Debug, Clone)]
 pub struct IndexInfo {
     pub name: String,
@@ -18,7 +18,7 @@ pub struct IndexInfo {
     pub root_page: u64,
 }
 
-/// Column metadata
+
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
     pub name: String,
@@ -31,7 +31,7 @@ pub enum DataType {
     String,
 }
 
-/// Table metadata
+
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub name: String,
@@ -39,7 +39,7 @@ pub struct TableInfo {
     pub records: Vec<RID>,
 }
 
-/// System catalog for tables and indexes
+
 #[derive(Debug)]
 pub struct Catalog {
     pub tables: HashMap<String, TableInfo>,
@@ -102,7 +102,7 @@ impl Catalog {
     }
 }
 
-/// Enhanced storage engine
+
 pub struct Storage {
     pub buffer_pool: BufferPool,
     pub free_list: FreeList,
@@ -123,7 +123,7 @@ impl Storage {
         })
     }
 
-    /// Insert raw bytes into a page (no WAL here).
+    
     pub fn insert(&mut self, data: &[u8]) -> Result<RID> {
         let needed = data.len() + RecordPage::SLOT_ENTRY_SIZE;
         let page_no = if let Some(pn) = self.free_list.choose_page(needed) {
@@ -145,7 +145,7 @@ impl Storage {
         Ok(rid)
     }
 
-    /// Insert a row into a table (no WAL here).
+    
     pub fn insert_row(
         &mut self,
         table_name: &str,
@@ -163,7 +163,7 @@ impl Storage {
         Ok(())
     }
 
-    /// Scan a table (read-only).
+    
     pub fn scan_table(
         &mut self,
         table_name: &str,
@@ -247,7 +247,7 @@ impl Storage {
         Ok(())
     }
 
-    /// Create a B⁺-tree index
+    
     pub fn create_index(
         &mut self,
         table_name: &str,

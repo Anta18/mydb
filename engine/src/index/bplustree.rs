@@ -1,4 +1,4 @@
-// index/bplustree.rs
+
 use crate::index::bplustree_search::BPlusTreeSearch;
 use crate::index::node_modifier::NodeModifier;
 use crate::index::node_serializer::{LeafNodeSerializer, NodeHeader, NodeType};
@@ -7,16 +7,16 @@ use crate::storage::record::RID;
 use crate::storage::storage::Storage;
 use anyhow::{Context, Result, anyhow};
 
-/// High-level B+ Tree controller
+
 pub struct BPlusTree {
     storage: Storage,
     order: usize,
     root_page: u64,
-    table_name: String, // Add table name to know which table this index belongs to
+    table_name: String, 
 }
 
 impl BPlusTree {
-    /// Initialize a new B+ tree: creates a root leaf node.
+    
     pub fn new(
         path: &str,
         page_size: usize,
@@ -26,9 +26,9 @@ impl BPlusTree {
     ) -> Result<Self> {
         let mut storage =
             Storage::new(path, page_size, pool_size).context("Initializing storage failed")?;
-        // Allocate root
+        
         let root_page = storage.buffer_pool.pagefile.allocate_page()?;
-        // Write empty leaf node header
+        
         let header = NodeHeader {
             node_type: NodeType::Leaf,
             key_count: 0,
@@ -47,12 +47,12 @@ impl BPlusTree {
         })
     }
 
-    /// Get the table name this index belongs to
+    
     pub fn table_name(&self) -> &str {
         &self.table_name
     }
 
-    /// Insert a key and RID, updating root if split.
+    
     pub fn insert(&mut self, key: u64, rid: RID) -> Result<()> {
         let mut modifier = NodeModifier::new(&mut self.storage, self.order);
         let new_root = modifier.insert(self.root_page, key, rid)?;
@@ -60,7 +60,7 @@ impl BPlusTree {
         Ok(())
     }
 
-    /// Get the RID associated with a key.
+    
     pub fn get(&mut self, key: u64) -> Result<Option<RID>> {
         let mut searcher = BPlusTreeSearch::new(&mut self.storage, self.order);
         let leaf = searcher.locate_leaf(self.root_page, key)?;
@@ -75,7 +75,7 @@ impl BPlusTree {
         }
     }
 
-    /// Perform a range scan between lo and hi (inclusive).
+    
     pub fn range_scan_keys(&mut self, lo: u64, hi: u64) -> Result<Vec<(u64, RID)>> {
         let mut results = Vec::new();
         let mut searcher = BPlusTreeSearch::new(&mut self.storage, self.order);
@@ -101,8 +101,8 @@ impl BPlusTree {
         Ok(results)
     }
 
-    /// Range scan based on a bound expression predicate
-    /// This is a simplified implementation that extracts key ranges from predicates
+    
+    
     pub fn range_scan(&mut self, predicate: &BoundExpr) -> Result<Vec<RID>> {
         match predicate {
             BoundExpr::BinaryOp {
@@ -116,7 +116,7 @@ impl BPlusTree {
 
                 match op {
                     crate::query::parser::BinaryOp::Eq => {
-                        // For equality, look for exact match
+                        
                         if let Some(rid) = self.get(key)? {
                             Ok(vec![rid])
                         } else {
@@ -124,12 +124,12 @@ impl BPlusTree {
                         }
                     }
                     crate::query::parser::BinaryOp::Lt => {
-                        // Less than: range from 0 to key-1
+                        
                         let results = self.range_scan_keys(0, key.saturating_sub(1))?;
                         Ok(results.into_iter().map(|(_, rid)| rid).collect())
                     }
                     crate::query::parser::BinaryOp::Gt => {
-                        // Greater than: range from key+1 to max
+                        
                         let results = self.range_scan_keys(key + 1, u64::MAX)?;
                         Ok(results.into_iter().map(|(_, rid)| rid).collect())
                     }

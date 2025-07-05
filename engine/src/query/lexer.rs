@@ -1,12 +1,12 @@
-// query/lexer.rs
+
 
 use std::iter::Peekable;
 use std::str::Chars;
 
-/// All token types in our SQL subset.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
-    // Keywords
+    
     Select,
     Insert,
     Update,
@@ -19,31 +19,31 @@ pub enum TokenKind {
     Table,
     Into,
     Values,
-    // Identifiers & Literals
+    
     Identifier(String),
     IntLiteral(i64),
     StringLiteral(String),
-    // Operators
-    Eq,    // =
-    NotEq, // <>
-    Lt,    // <
-    LtEq,  // <=
-    Gt,    // >
-    GtEq,  // >=
-    Plus,  // +
-    Minus, // -
-    Star,  // *
-    Slash, // /
-    // Punctuation
-    Comma,     // ,
-    Semicolon, // ;
-    LParen,    // (
-    RParen,    // )
-    // End of input
+    
+    Eq,    
+    NotEq, 
+    Lt,    
+    LtEq,  
+    Gt,    
+    GtEq,  
+    Plus,  
+    Minus, 
+    Star,  
+    Slash, 
+    
+    Comma,     
+    Semicolon, 
+    LParen,    
+    RParen,    
+    
     EOF,
 }
 
-/// A token with its kind and location.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
@@ -51,7 +51,7 @@ pub struct Token {
     pub col: usize,
 }
 
-/// Lexing errors, with position.
+
 #[derive(Debug, Clone)]
 pub enum LexError {
     UnexpectedChar(char, usize, usize),
@@ -59,18 +59,18 @@ pub enum LexError {
     InvalidNumber(String, usize, usize),
 }
 
-/// The SQL lexer: an iterator over `Token` or `LexError`.
+
 pub struct Lexer<'src> {
     input: Peekable<Chars<'src>>,
     src: &'src str,
-    /// Current absolute index into `src`
+    
     idx: usize,
     line: usize,
     col: usize,
 }
 
 impl<'src> Lexer<'src> {
-    /// Create a new lexer from input SQL text.
+    
     pub fn new(src: &'src str) -> Self {
         Lexer {
             input: src.chars().peekable(),
@@ -81,12 +81,12 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    /// Peek next character without consuming.
+    
     fn peek_char(&mut self) -> Option<char> {
         self.input.peek().copied()
     }
 
-    /// Consume and return next character.
+    
     fn next_char(&mut self) -> Option<char> {
         let c = self.input.next()?;
         self.idx += c.len_utf8();
@@ -99,22 +99,22 @@ impl<'src> Lexer<'src> {
         Some(c)
     }
 
-    /// Skip whitespace and comments (`-- ... \n`).
+    
     fn skip_whitespace_and_comments(&mut self) {
         loop {
-            // Skip spaces, tabs, newlines
+            
             while matches!(self.peek_char(), Some(c) if c.is_whitespace()) {
                 self.next_char();
             }
-            // Skip line comments
+            
             if self.peek_char() == Some('-') {
-                // look ahead for "--"
+                
                 let mut iter = self.input.clone();
                 if iter.next() == Some('-') && iter.next() == Some('-') {
-                    // consume "--"
+                    
                     self.next_char();
                     self.next_char();
-                    // consume until newline or EOF
+                    
                     while let Some(c) = self.peek_char() {
                         if c == '\n' {
                             break;
@@ -128,17 +128,17 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    /// Try to read an identifier or keyword.
+    
     fn read_identifier_or_keyword(&mut self) -> String {
         let start_idx = self.idx;
         while matches!(self.peek_char(), Some(c) if c.is_ascii_alphanumeric() || c == '_') {
             self.next_char();
         }
-        // slice out the identifier
+        
         self.src[start_idx..self.idx].to_ascii_uppercase()
     }
 
-    /// Try to read a decimal integer literal.
+    
     fn read_number(&mut self) -> Result<String, LexError> {
         let start_idx = self.idx;
         while matches!(self.peek_char(), Some(c) if c.is_ascii_digit()) {
@@ -147,9 +147,9 @@ impl<'src> Lexer<'src> {
         Ok(self.src[start_idx..self.idx].to_string())
     }
 
-    /// Read a `'...'` string literal (single quotes).
+    
     fn read_string(&mut self) -> Result<String, LexError> {
-        // assume opening ' has been consumed
+        
         let mut result = String::new();
         loop {
             match self.next_char() {
@@ -163,14 +163,14 @@ impl<'src> Lexer<'src> {
         Ok(result)
     }
 
-    /// Main lexing function: produce next token or error.
+    
     fn next_token(&mut self) -> Result<Token, LexError> {
         self.skip_whitespace_and_comments();
         let (line, col) = (self.line, self.col);
 
         let tok = match self.next_char() {
             Some(c) => match c {
-                // Single-character tokens
+                
                 ',' => TokenKind::Comma,
                 ';' => TokenKind::Semicolon,
                 '(' => TokenKind::LParen,
@@ -208,10 +208,10 @@ impl<'src> Lexer<'src> {
                     });
                 }
                 c if c.is_ascii_digit() => {
-                    // back up one char in indices
+                    
                     self.idx -= c.len_utf8();
                     self.col -= 1;
-                    self.input.next_back(); // un-consume
+                    self.input.next_back(); 
                     let num_str = self.read_number().map_err(|e| e)?;
                     match num_str.parse::<i64>() {
                         Ok(v) => {
@@ -225,12 +225,12 @@ impl<'src> Lexer<'src> {
                     }
                 }
                 c if c.is_ascii_alphabetic() || c == '_' => {
-                    // back up one char
+                    
                     self.idx -= c.len_utf8();
                     self.col -= 1;
                     self.input.next_back();
                     let ident = self.read_identifier_or_keyword();
-                    // map to keyword or identifier
+                    
                     return Ok(Token {
                         kind: match ident.as_str() {
                             "SELECT" => TokenKind::Select,

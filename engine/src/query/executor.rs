@@ -1,8 +1,8 @@
-// query/executor.rs
+
 
 use crate::index::bplustree::BPlusTree;
 use crate::query::binder::{BoundExpr, Catalog, Value};
-use crate::query::parser::BinaryOp; // Import BinaryOp from parser
+use crate::query::parser::BinaryOp; 
 use crate::storage::record::RID;
 use crate::storage::storage::Storage;
 use anyhow::{Result, anyhow};
@@ -10,17 +10,17 @@ use std::collections::VecDeque;
 
 pub type Tuple = Vec<Value>;
 
-/// The iterator interface for all physical operators.
+
 pub trait PhysicalOp {
-    /// Prepare any state (e.g. open files, build hash tables).
+    
     fn open(&mut self) -> Result<()>;
-    /// Return the next tuple, or `None` if done.
+    
     fn next(&mut self) -> Result<Option<Tuple>>;
-    /// Clean up resources.
+    
     fn close(&mut self) -> Result<()>;
 }
 
-/// Executor: materializes all tuples from a plan.
+
 pub struct Executor<'a> {
     root: Box<dyn PhysicalOp + 'a>,
 }
@@ -30,7 +30,7 @@ impl<'a> Executor<'a> {
         Executor { root }
     }
 
-    /// Run the plan to completion, collecting all tuples.
+    
     pub fn execute(&mut self) -> Result<Vec<Tuple>> {
         self.root.open()?;
         let mut rows = Vec::new();
@@ -42,17 +42,17 @@ impl<'a> Executor<'a> {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// SeqScan + Filter + Projection implementations
-////////////////////////////////////////////////////////////////////////////////
 
-/// Full table scan: reads all RIDs from storage and fetches tuples.
+
+
+
+
 pub struct SeqScanOp<'a> {
     storage: &'a mut Storage,
     catalog: &'a Catalog,
     table: String,
     predicate: Option<BoundExpr>,
-    // queue of pending RIDs
+    
     rids: VecDeque<RID>,
 }
 
@@ -75,10 +75,10 @@ impl<'a> SeqScanOp<'a> {
 
 impl<'a> PhysicalOp for SeqScanOp<'a> {
     fn open(&mut self) -> Result<()> {
-        // gather all RIDs: scan the table's pages in storage
+        
         let table_meta = self.catalog.get_table(&self.table)?;
 
-        // Scan through all pages in the buffer pool's pagefile
+        
         for page_no in 0..self.storage.buffer_pool.pagefile.num_pages()? {
             let frame = self.storage.buffer_pool.fetch_page(page_no)?;
             let page = crate::storage::record::Page::from_bytes(
@@ -86,7 +86,7 @@ impl<'a> PhysicalOp for SeqScanOp<'a> {
                 self.storage.page_size,
             );
 
-            // Iterate through all slots in the page using the iter_slots method
+            
             for (slot_no, _slot_data) in page.iter_slots() {
                 self.rids.push_back((page_no, slot_no));
             }
@@ -101,10 +101,10 @@ impl<'a> PhysicalOp for SeqScanOp<'a> {
             let tuple_data = self.storage.fetch(rid)?;
             let tuple = self.deserialize_tuple(&tuple_data)?;
 
-            // apply predicate if any
+            
             if let Some(pred) = &self.predicate {
                 if !eval_predicate(pred, &tuple)? {
-                    continue; // skip non-matching
+                    continue; 
                 }
             }
             return Ok(Some(tuple));
@@ -119,7 +119,7 @@ impl<'a> PhysicalOp for SeqScanOp<'a> {
 }
 
 impl<'a> SeqScanOp<'a> {
-    /// Convert raw bytes to a tuple of Values based on table schema
+    
     fn deserialize_tuple(&self, data: &[u8]) -> Result<Tuple> {
         let table_meta = self.catalog.get_table(&self.table)?;
         let mut tuple = Vec::with_capacity(table_meta.columns.len());
@@ -164,7 +164,7 @@ impl<'a> SeqScanOp<'a> {
     }
 }
 
-/// Index scan: lookup matching RIDs using a B+ tree, then fetch tuples.
+
 pub struct IndexScanOp<'a> {
     storage: &'a mut Storage,
     catalog: &'a Catalog,
@@ -192,7 +192,7 @@ impl<'a> IndexScanOp<'a> {
 
 impl<'a> PhysicalOp for IndexScanOp<'a> {
     fn open(&mut self) -> Result<()> {
-        // Extract key value from predicate for range scan
+        
         let rids = self.bptree.range_scan(&self.predicate)?;
 
         for rid in rids {
@@ -217,10 +217,10 @@ impl<'a> PhysicalOp for IndexScanOp<'a> {
 }
 
 impl<'a> IndexScanOp<'a> {
-    /// Convert raw bytes to a tuple of Values based on table schema
+    
     fn deserialize_tuple(&self, data: &[u8]) -> Result<Tuple> {
-        // This would need to know which table the B+ tree corresponds to
-        // For now, assume it's stored in the B+ tree or passed separately
+        
+        
         let table_name = self.bptree.table_name();
         let table_meta = self.catalog.get_table(table_name)?;
         let mut tuple = Vec::with_capacity(table_meta.columns.len());
@@ -265,7 +265,7 @@ impl<'a> IndexScanOp<'a> {
     }
 }
 
-/// Filter operator: wraps any child and applies a predicate.
+
 pub struct FilterOp<'a> {
     child: Box<dyn PhysicalOp + 'a>,
     predicate: BoundExpr,
@@ -296,7 +296,7 @@ impl<'a> PhysicalOp for FilterOp<'a> {
     }
 }
 
-/// Projection operator: evaluates expressions against each tuple.
+
 pub struct ProjectionOp<'a> {
     child: Box<dyn PhysicalOp + 'a>,
     exprs: Vec<BoundExpr>,
@@ -329,11 +329,11 @@ impl<'a> PhysicalOp for ProjectionOp<'a> {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Expression evaluation
-////////////////////////////////////////////////////////////////////////////////
 
-/// Evaluate an expression against a tuple (column ordinal = position).
+
+
+
+
 pub fn eval_expr(expr: &BoundExpr, row: &Tuple) -> Result<Value> {
     Ok(match expr {
         BoundExpr::Literal(v) => v.clone(),
@@ -348,7 +348,7 @@ pub fn eval_expr(expr: &BoundExpr, row: &Tuple) -> Result<Value> {
     })
 }
 
-/// Evaluate a boolean predicate (returns true if tuple matches).
+
 fn eval_predicate(pred: &BoundExpr, row: &Tuple) -> Result<bool> {
     match eval_expr(pred, row)? {
         Value::Int(i) => Ok(i != 0),
@@ -356,7 +356,7 @@ fn eval_predicate(pred: &BoundExpr, row: &Tuple) -> Result<bool> {
     }
 }
 
-/// Evaluate a binary operator on two literal values.
+
 fn eval_binop(left: &Value, op: BinaryOp, right: &Value) -> Result<Value> {
     match (left, right, op) {
         (Value::Int(l), Value::Int(r), BinaryOp::Eq) => Ok(Value::Int((*l == *r) as i64)),

@@ -1,4 +1,4 @@
-// tx/recovery_manager.rs
+
 
 use crate::storage::storage::Storage;
 use crate::tx::log_manager::{LogManager, LogRecordType, Lsn, TxId};
@@ -10,9 +10,9 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::sync::RwLock; // Changed from std::sync::Mutex
+use tokio::sync::RwLock; 
 
-/// A log record header (making fields public for recovery).
+
 #[derive(Debug)]
 pub struct LogRecordHeader {
     pub lsn: Lsn,
@@ -22,17 +22,17 @@ pub struct LogRecordHeader {
     pub payload_len: u32,
 }
 
-/// A complete log record: header + payload bytes (making fields public for recovery).
+
 #[derive(Debug)]
 pub struct RecoveryLogRecord {
     pub header: LogRecordHeader,
     pub payload: Vec<u8>,
 }
 
-/// RecoveryManager drives crash recovery using the WAL and the storage layer.
+
 pub struct RecoveryManager {
     wal_path: PathBuf,
-    storage: Arc<RwLock<Storage>>, // Changed from Mutex to RwLock
+    storage: Arc<RwLock<Storage>>, 
 }
 
 impl RecoveryManager {
@@ -40,25 +40,25 @@ impl RecoveryManager {
         RecoveryManager { wal_path, storage }
     }
 
-    /// Run full recovery: analysis, redo, undo.
+    
     pub async fn recover(&self) -> Result<()> {
-        // Made async
-        // Open WAL
+        
+        
         let mut file = File::open(&self.wal_path)
             .with_context(|| format!("opening WAL file for recovery: {:?}", self.wal_path))?;
-        // 1. Analysis pass
+        
         let (dirty_pages, tx_status, tx_last_lsn) = self.analysis_pass(&mut file)?;
-        // 2. Redo pass
-        self.redo_pass(&mut file, &dirty_pages).await?; // Made async
-        // 3. Undo pass
-        self.undo_pass(&tx_status, &tx_last_lsn).await?; // Made async
+        
+        self.redo_pass(&mut file, &dirty_pages).await?; 
+        
+        self.undo_pass(&tx_status, &tx_last_lsn).await?; 
         Ok(())
     }
 
-    /// Read through all WAL, collecting:
-    /// - dirty_pages: pages that have been updated (lsn of first update)
-    /// - tx_status: for each tx, whether committed (true), aborted (false), or still active (None)
-    /// - tx_last_lsn: last LSN seen for each tx
+    
+    
+    
+    
     fn analysis_pass(
         &self,
         file: &mut File,
@@ -72,7 +72,7 @@ impl RecoveryManager {
         let mut tx_last_lsn: HashMap<TxId, Lsn> = HashMap::new();
         file.rewind()?;
         loop {
-            // Read record size
+            
             let mut len_buf = [0u8; 4];
             if file.read_exact(&mut len_buf).is_err() {
                 break;
@@ -82,14 +82,14 @@ impl RecoveryManager {
             file.read_exact(&mut rec_buf)?;
             let record = Self::deserialize_record(&rec_buf)?;
             let hdr = &record.header;
-            // Track last LSN per tx
+            
             tx_last_lsn.insert(hdr.tx_id, hdr.lsn);
             match hdr.typ {
                 LogRecordType::Begin => {
                     tx_status.insert(hdr.tx_id, None);
                 }
                 LogRecordType::Update => {
-                    // payload begins with page_no (u64)
+                    
                     let page_no = u64::from_le_bytes(record.payload[0..8].try_into().unwrap());
                     dirty_pages.insert(page_no);
                 }
@@ -104,72 +104,72 @@ impl RecoveryManager {
         Ok((dirty_pages, tx_status, tx_last_lsn))
     }
 
-    /// Redo all updates for pages still marked dirty, in LSN order.
+    
     async fn redo_pass(&self, file: &mut File, dirty_pages: &HashSet<u64>) -> Result<()> {
-        // Made async
+        
         file.rewind()?;
         while let Some(record) = Self::next_record(file)? {
             if record.header.typ == LogRecordType::Update {
                 let payload = &record.payload;
                 let page_no = u64::from_le_bytes(payload[0..8].try_into().unwrap());
                 if !dirty_pages.contains(&page_no) {
-                    continue; // already clean
+                    continue; 
                 }
-                // payload: [page_no(8)|offset(4)|before(..)|after(..)]
+                
                 let offset = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as u64;
                 let after = &payload[12..];
 
-                // Lock storage for this operation
-                let mut storage = self.storage.write().await; // Changed to async write lock
+                
+                let mut storage = self.storage.write().await; 
 
-                // apply after-image
+                
                 let mut page = storage.buffer_pool.pagefile.read_page(page_no)?;
                 page[offset as usize..offset as usize + after.len()].copy_from_slice(after);
                 storage.buffer_pool.pagefile.write_page(page_no, &page)?;
 
-                // storage lock is automatically released here
+                
             }
         }
         Ok(())
     }
 
-    /// Undo any uncommitted transactions by walking their LSN chain backward.
+    
     async fn undo_pass(
-        // Made async
+        
         &self,
         tx_status: &HashMap<TxId, Option<bool>>,
         tx_last_lsn: &HashMap<TxId, Lsn>,
     ) -> Result<()> {
         for (&tx, status) in tx_status.iter() {
             if status.is_none() {
-                // active at crash → needs undo
+                
                 let mut lsn = tx_last_lsn[&tx];
                 while lsn > 0 {
                     let record = self.fetch_record(lsn)?;
                     if record.header.typ == LogRecordType::Update {
-                        // payload: after/then before-image follows offset
+                        
                         let payload = &record.payload;
                         let page_no = u64::from_le_bytes(payload[0..8].try_into().unwrap());
                         let offset = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as u64;
-                        // before-image length = rest / 2
+                        
                         let half = (payload.len() - 12) / 2;
                         let before = &payload[12..12 + half];
 
-                        // Lock storage for this operation
-                        let mut storage = self.storage.write().await; // Changed to async write lock
+                        
+                        let mut storage = self.storage.write().await; 
 
-                        // apply before-image
+                        
                         let mut page = storage.buffer_pool.pagefile.read_page(page_no)?;
                         page[offset as usize..offset as usize + before.len()]
                             .copy_from_slice(before);
                         storage.buffer_pool.pagefile.write_page(page_no, &page)?;
 
-                        // storage lock is automatically released here
+                        
                     }
-                    // follow prev_lsn
+                    
                     lsn = record.header.prev_lsn.unwrap_or(0);
                 }
-                // write abort for this tx
+                
                 let log_manager = LogManager::new(self.wal_path.clone())?;
                 log_manager.log_abort(tx)?;
             }
@@ -177,7 +177,7 @@ impl RecoveryManager {
         Ok(())
     }
 
-    /// Read and deserialize the next log record from the current file position.
+    
     fn next_record(file: &mut File) -> Result<Option<RecoveryLogRecord>> {
         let mut len_buf = [0u8; 4];
         if file.read_exact(&mut len_buf).is_err() {
@@ -189,8 +189,8 @@ impl RecoveryManager {
         Ok(Some(Self::deserialize_record(&rec_buf)?))
     }
 
-    /// Fetch a specific log record by scanning forward to its LSN.
-    /// Inefficient but acceptable for recovery on small logs.
+    
+    
     fn fetch_record(&self, target_lsn: Lsn) -> Result<RecoveryLogRecord> {
         let mut file = File::open(&self.wal_path)?;
         while let Some(record) = Self::next_record(&mut file)? {
@@ -201,9 +201,9 @@ impl RecoveryManager {
         anyhow::bail!("LSN {} not found in WAL", target_lsn);
     }
 
-    /// Deserialize header+payload from record bytes.
+    
     fn deserialize_record(buf: &[u8]) -> Result<RecoveryLogRecord> {
-        // skip size, already removed
+        
         let mut pos = 0;
         let read_u64 = |b: &[u8]| u64::from_le_bytes(b.try_into().unwrap());
         let lsn = read_u64(&buf[pos..pos + 8]);

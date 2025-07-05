@@ -1,4 +1,4 @@
-// query/planner.rs
+
 
 use crate::query::binder::{BoundExpr, BoundStmt, DataType, TableMeta};
 use crate::storage::storage::Storage;
@@ -94,7 +94,7 @@ impl<'a> Planner<'a> {
         filter: Option<BoundExpr>,
     ) -> Result<LogicalPlan> {
         let key = table.to_ascii_lowercase();
-        // Use ok_or_else since `with_context` isn't on Option
+        
         let _ = self
             .catalog
             .get(&key)

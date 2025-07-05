@@ -1,4 +1,4 @@
-// net/server.rs
+
 
 use crate::{
     query::{
@@ -35,7 +35,7 @@ use std::{
 use tokio::{net::TcpListener, sync::RwLock};
 use tracing::{debug, error, info};
 
-// Simple JSON types for login and query
+
 #[derive(Deserialize)]
 struct LoginReq {
     user: String,
@@ -69,7 +69,7 @@ async fn handle_request(
     debug!("Received {} {}", req.method(), req.uri().path());
 
     let response = match (req.method(), req.uri().path()) {
-        // Login endpoint
+        
         (&Method::POST, "/login") => {
             let body = match collect_body(req.into_body()).await {
                 Ok(b) => b,
@@ -105,9 +105,9 @@ async fn handle_request(
             }
         }
 
-        // SQL query endpoint
+        
         (&Method::POST, "/query") => {
-            // Authentication
+            
             let authed = req
                 .headers()
                 .get("cookie")
@@ -121,7 +121,7 @@ async fn handle_request(
                     .unwrap());
             }
 
-            // Recovery
+            
             let rm = RecoveryManager::new(state.wal_path.clone(), state.storage.clone());
             if let Err(e) = rm.recover().await {
                 error!("Recovery failed: {:#}", e);
@@ -132,7 +132,7 @@ async fn handle_request(
             }
             info!("Recovery complete");
 
-            // Read JSON
+            
             let body = match collect_body(req.into_body()).await {
                 Ok(b) => b,
                 Err(e) => {
@@ -157,7 +157,7 @@ async fn handle_request(
             };
             debug!("SQL: {:?}", qb.sql);
 
-            // Parse SQL → AST
+            
             let mut parser = match Parser::new(&qb.sql) {
                 Ok(p) => p,
                 Err(e) => {
@@ -180,7 +180,7 @@ async fn handle_request(
             };
             info!("AST: {:?}", stmt);
 
-            // Begin transaction
+            
             let tx_id = TX_COUNTER.fetch_add(1, Ordering::SeqCst);
             state
                 .logmgr
@@ -196,7 +196,7 @@ async fn handle_request(
                 .unwrap();
             info!("Transaction {} begun", tx_id);
 
-            // Acquire lock
+            
             let (res, mode) = match &stmt {
                 Statement::Select { table, .. } => {
                     (Resource::Table(table.clone()), LockMode::Shared)
@@ -223,11 +223,11 @@ async fn handle_request(
                 .unwrap();
             info!("Lock acquired: {:?} {:?}", res, mode);
 
-            // Storage write lock
+            
             let mut storage = state.storage.write().await;
             let mut bind_catalog = BinderCatalog::new();
 
-            // DDL short-circuit
+            
             if let Statement::CreateTable { name, columns } = &stmt {
                 let infos = columns
                     .iter()
@@ -309,7 +309,7 @@ async fn handle_request(
                     .unwrap());
             }
 
-            // Build executor
+            
             let mut exec = create_executor_from_statement(stmt, &mut storage, &mut bind_catalog)
                 .map_err(|e| {
                     error!("Build failed: {:#}", e);
@@ -323,7 +323,7 @@ async fn handle_request(
                 .unwrap();
             debug!("Executor built");
 
-            // Execute
+            
             let tuples = exec
                 .execute()
                 .map_err(|e| {
@@ -338,7 +338,7 @@ async fn handle_request(
                 .unwrap();
             info!("Executed, {} rows", tuples.len());
 
-            // Commit
+            
             state
                 .logmgr
                 .log_commit(tx_id)
@@ -355,7 +355,7 @@ async fn handle_request(
                 .unwrap();
             state.locks.unlock_all(tx_id);
 
-            // Respond
+            
             let rows = tuples
                 .into_iter()
                 .map(|tuple| {
@@ -400,20 +400,20 @@ fn create_executor_from_statement<'a>(
     storage: &'a mut Storage,
     bind_catalog: &'a mut BinderCatalog,
 ) -> anyhow::Result<Executor<'a>> {
-    // 1) Bind
+    
     let mut binder = Binder::new(bind_catalog, storage);
     let bound = binder.bind(stmt).context("Bind failed")?;
-    // 2) Logical plan
+    
     let mut lp = LogicalPlanner::new(&bind_catalog.tables, storage);
     let logical = lp.plan(bound).context("Logical planning failed")?;
-    // 3) Optimize
+    
     let optimized = Optimizer::optimize(logical).context("Optimize failed")?;
-    // 4) Physical plan
+    
     let mut pp = PhysicalPlanner::new(bind_catalog, storage);
     let phys = pp
         .create_physical_plan(optimized)
         .context("Physical planning failed")?;
-    // 5) Build operator tree
+    
     fn build<'a>(
         plan: crate::query::physical_planner::PhysicalPlan,
         storage: &'a mut Storage,
@@ -445,7 +445,7 @@ pub async fn run_server(
     storage: Storage,
     wal_path: PathBuf,
 ) -> anyhow::Result<()> {
-    // Initialize detailed logging
+    
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
         .init();
@@ -469,7 +469,7 @@ pub async fn run_server(
         let state = state.clone();
 
         tokio::spawn(async move {
-            // Specify correct response-body type
+            
             let service = service_fn(move |req| handle_request(req, state.clone()));
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
                 error!("Connection error: {:?}", e);

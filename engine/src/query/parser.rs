@@ -1,9 +1,9 @@
-// query/parser.rs
+
 
 use crate::query::lexer::{Lexer, Token, TokenKind};
 use anyhow::{Result, anyhow, bail};
 
-/// AST definitions
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     CreateTable {
@@ -56,18 +56,18 @@ pub enum BinaryOp {
     Or,
 }
 
-/// Recursive-descent SQL parser.
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
 }
 
 impl Parser {
-    /// Tokenize input and initialize parser.
+    
     pub fn new(src: &str) -> Result<Self> {
         let mut tokens = Vec::new();
         for item in Lexer::new(src) {
-            // Map LexError into anyhow::Error
+            
             let tok = item.map_err(|e| anyhow!("Lex error: {:?}", e))?;
             tokens.push(tok);
         }
@@ -104,11 +104,11 @@ impl Parser {
         }
     }
 
-    /// Parse a single SQL statement.
+    
     pub fn parse_statement(&mut self) -> Result<Statement> {
         match &self.peek().kind {
             TokenKind::Create => {
-                // Look ahead for "INDEX"
+                
                 if let Some(tok) = self.tokens.get(self.pos + 1) {
                     if let TokenKind::Identifier(ref s) = tok.kind {
                         if s.eq_ignore_ascii_case("INDEX") {
@@ -159,7 +159,7 @@ impl Parser {
 
     fn parse_create_index(&mut self) -> Result<Statement> {
         self.expect(TokenKind::Create)?;
-        // `INDEX` is lexed as Identifier("INDEX")
+        
         if let TokenKind::Identifier(ref s) = self.peek().kind {
             if s.eq_ignore_ascii_case("INDEX") {
                 self.bump();
@@ -173,7 +173,7 @@ impl Parser {
             TokenKind::Identifier(id) => id,
             _ => bail!("Expected index name"),
         };
-        // Expect ON
+        
         if let TokenKind::Identifier(ref s) = self.peek().kind {
             if s.eq_ignore_ascii_case("ON") {
                 self.bump();
