@@ -26,7 +26,7 @@ In another terminal, run:
 cargo run --manifest-path engine/Cargo.toml -- shell
 ```
 
-The shell prompts for a username and password (default `admin` / `password`) and lets you submit SQL statements ending with `;`.
+The shell prompts and lets you submit SQL statements ending with `;`.
 
 ## Running tests
 
